@@ -279,6 +279,8 @@ func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 
 		if err := batCtrl.SetBatteryMode(deviceMode); err != nil {
 			if site.batteryPVChargePending {
+				// A lost acknowledgement leaves the actual device mode unknown.
+				delete(site.batteryModeApplied, name)
 				pvErrors = append(pvErrors, err)
 				continue
 			}

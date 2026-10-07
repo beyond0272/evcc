@@ -174,6 +174,22 @@ func TestActivePVBatteryChargingHemsDimmed(t *testing.T) {
 	assert.Equal(t, []api.BatteryMode{api.BatteryHold}, b.applied)
 }
 
+func TestActivePVBatteryChargingLostAcknowledgement(t *testing.T) {
+	b := &pvChargingBattery{soc: 50, limit: 1000, modes: []api.BatteryMode{api.BatteryNormal, api.BatteryCharge}, setErr: errors.New("lost acknowledgement")}
+	s := pvChargingSite(b)
+	s.batteryMode = api.BatteryNormal
+	s.batteryModeApplied = map[string]api.BatteryMode{"battery": api.BatteryNormal}
+	s.batteryPVCharge = map[string]bool{"battery": true}
+	s.updateBatteryMode(false, false, api.Rate{})
+	assert.Empty(t, s.batteryModeApplied)
+	assert.True(t, s.batteryPVChargePending)
+	b.setErr = nil
+	s.batteryPVCharge = nil
+	s.updateBatteryMode(false, false, api.Rate{})
+	assert.Equal(t, []api.BatteryMode{api.BatteryCharge, api.BatteryNormal}, b.applied)
+	assert.False(t, s.batteryPVChargePending)
+}
+
 func TestActivePVBatteryChargingPriorityAndFailure(t *testing.T) {
 	b := &pvChargingBattery{soc: 50, limit: 2000, modes: []api.BatteryMode{api.BatteryNormal, api.BatteryCharge, api.BatteryHold, api.BatteryDischarge}}
 	s := pvChargingSite(b)
