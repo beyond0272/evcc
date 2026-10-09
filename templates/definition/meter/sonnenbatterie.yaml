@@ -128,6 +128,31 @@ render: |
           headers:
           - content-type: application/json
           - Auth-Token: {{ .token }}
+  chargepower:
+    source: sequence
+    set:
+    - source: http
+      uri: http://{{ .host }}/api/v2/configurations
+      insecure: true
+      method: PUT
+      headers:
+      - content-type: application/json
+      - Auth-Token: {{ .token }}
+      body: '{"EM_OperatingMode":"1"}'
+    - source: http
+      uri: http://{{ .host }}/api/v2/setpoint/discharge/0
+      insecure: true
+      method: POST
+      headers:
+      - content-type: application/json
+      - Auth-Token: {{ .token }}
+    - source: http
+      uri: http://{{ .host }}/api/v2/setpoint/charge/${chargePower:%.0f}
+      insecure: true
+      method: POST
+      headers:
+      - content-type: application/json
+      - Auth-Token: {{ .token }}
   {{- end }}
   {{- include "battery-params" . }}
   {{- end }}

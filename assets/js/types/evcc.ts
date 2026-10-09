@@ -225,6 +225,10 @@ export interface State {
   homePower?: number;
   /** Configured grid operating point in W. Positive values maintain grid import. */
   residualPower?: number;
+  /** Start threshold for active home battery PV charging in W. */
+  batteryPVStartPower?: number;
+  /** At least one battery supports dynamic PV charge power control. */
+  batteryPVChargingSupported?: boolean;
   /** Static grid export power limit in W used as optimizer constraint, 0 = disabled. An active HEMS curtailment takes precedence. */
   gridExportLimit?: number;
   /** Percentile of the historic energy profiles used for demand prediction in %, e.g. 50 = median. Null uses the average. */

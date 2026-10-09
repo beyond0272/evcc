@@ -64,7 +64,9 @@
       },
       "priority": "Home battery has priority while it is below {soc}. Then the charging points receive the surplus.",
       "priorityNone": "Solar surplus goes straight to the charging points. Set a value above {soc} to prioritize the home battery.",
-      "priorityTitle": "Where does the surplus go first?"
+      "priorityTitle": "Where does the surplus go first?",
+      "pvStartPowerTitle": "Start active PV battery charging at",
+      "pvStartPowerHelp": "EVCC starts active battery charging when unused solar surplus reaches this value. Once started, charging continues below this threshold while usable surplus remains. Existing independent battery charging is respected."
     },
     "optimizer": {
       "action": {

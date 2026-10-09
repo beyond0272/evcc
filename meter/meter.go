@@ -13,6 +13,12 @@ import (
 	"github.com/evcc-io/evcc/util"
 )
 
+type batteryChargePowerSetter func(float64) error
+
+func (f batteryChargePowerSetter) SetBatteryChargePower(power float64) error {
+	return f(power)
+}
+
 func init() {
 	registry.AddCtx(api.Custom, NewConfigurableFromConfig)
 }
@@ -35,6 +41,7 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 		Soc                   *plugin.Config // optional
 		LimitSoc              *plugin.Config // optional
 		BatteryMode           *plugin.Config // optional
+		ChargePower           *plugin.Config // optional dynamic charge power setter
 		BatteryModes          []string       // optional, modes supported by batteryMode if it cannot report them itself
 	}
 
@@ -93,6 +100,14 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 		implement.May(m, implement.BatteryCapacity(capacity))
 		implement.May(m, implement.BatterySocLimiter(socLimiter))
 		implement.May(m, implement.BatteryPowerLimiter(powerLimiter))
+
+		if cc.ChargePower != nil {
+			setPower, err := cc.ChargePower.FloatSetter(ctx, "chargePower")
+			if err != nil {
+				return nil, fmt.Errorf("battery charge power: %w", err)
+			}
+			implement.Has(m, api.BatteryChargePowerController(batteryChargePowerSetter(setPower)))
+		}
 
 		// limitSoc expresses normal/hold/charge through the reserve soc (hold uses the live soc),
 		// batteryMode switches the device's operating mode. Configured together the limit is written first.

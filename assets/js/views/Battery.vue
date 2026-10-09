@@ -24,6 +24,8 @@
 						:priority-soc="state.prioritySoc"
 						:buffer-start-soc="state.bufferStartSoc"
 						:battery-discharge-control="state.batteryDischargeControl"
+						:battery-pv-start-power="state.batteryPVStartPower ?? 500"
+						:battery-pv-charging-supported="state.batteryPVChargingSupported"
 						:battery-grid-discharge="state.batteryGridDischarge"
 						:battery="state.battery"
 						:experimental="state.experimental"

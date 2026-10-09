@@ -62,11 +62,12 @@ type Site struct {
 	log *util.Logger
 
 	// configuration
-	Title         string       `mapstructure:"title"`         // UI title
-	Voltage       float64      `mapstructure:"voltage"`       // Operating voltage. 230V for Germany.
-	ResidualPower float64      `mapstructure:"residualPower"` // PV meter only: household usage. Grid meter: household safety margin
-	Meters        MetersConfig `mapstructure:"meters"`        // Meter references
-	CurtailersRef []string     `mapstructure:"curtailers"`    // Curtailment device references
+	Title               string       `mapstructure:"title"`               // UI title
+	Voltage             float64      `mapstructure:"voltage"`             // Operating voltage. 230V for Germany.
+	ResidualPower       float64      `mapstructure:"residualPower"`       // PV meter only: household usage. Grid meter: household safety margin
+	BatteryPVStartPower float64      `mapstructure:"batteryPVStartPower"` // PV start threshold in W
+	Meters              MetersConfig `mapstructure:"meters"`              // Meter references
+	CurtailersRef       []string     `mapstructure:"curtailers"`          // Curtailment device references
 
 	// meters
 	circuit        api.Circuit                // Circuit
@@ -113,17 +114,20 @@ type Site struct {
 	// cached measurement state, guarded by RWMutex
 	siteState
 
-	batteryMaxDischargePower *float64                   // Max discharge power of all battery meters
-	batteryMode              api.BatteryMode            // Battery mode (runtime only, not persisted)
-	batteryModeExternal      api.BatteryMode            // Battery mode (external, runtime only, not persisted)
-	batteryModeExternalTimer time.Time                  // Battery mode timer for external control
-	batteryModeApplied       map[string]api.BatteryMode // Battery mode last applied per battery meter
-	batteryPVCharge          map[string]bool
-	batteryPVChargeActive    bool
-	batteryPVChargePending   bool
-	suggestions              map[string]types.Suggestion // Optimizer suggestions by device key
-	suggestionActions        map[string]string           // last notified actionable optimizer action by device key
-	lastOptimizerSolve       *optimizerSolve             // last successful solve, reapplied to newer slots by the control cycle
+	batteryMaxDischargePower  *float64                   // Max discharge power of all battery meters
+	batteryMode               api.BatteryMode            // Battery mode (runtime only, not persisted)
+	batteryModeExternal       api.BatteryMode            // Battery mode (external, runtime only, not persisted)
+	batteryModeExternalTimer  time.Time                  // Battery mode timer for external control
+	batteryModeApplied        map[string]api.BatteryMode // Battery mode last applied per battery meter
+	batteryPVCharge           map[string]bool
+	batteryPVSetpoints        map[string]float64
+	batteryPVNativeSurplus    map[string]int
+	batteryPVChargeActive     bool
+	batteryPVChargePending    bool
+	batteryPVRecoveryRequired bool
+	suggestions               map[string]types.Suggestion // Optimizer suggestions by device key
+	suggestionActions         map[string]string           // last notified actionable optimizer action by device key
+	lastOptimizerSolve        *optimizerSolve             // last successful solve, reapplied to newer slots by the control cycle
 
 	optimizerMu      sync.Mutex // guards optimizer runs
 	optimizerUpdated time.Time  // last optimizer run, guarded by optimizerMu
@@ -401,9 +405,10 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 // NewSite creates a Site with sane defaults
 func NewSite() *Site {
 	site := &Site{
-		log:        util.NewLogger("site"),
-		Voltage:    230, // V
-		collectors: make(map[string]*metrics.Collector),
+		log:                 util.NewLogger("site"),
+		Voltage:             230, // V
+		BatteryPVStartPower: 500,
+		collectors:          make(map[string]*metrics.Collector),
 	}
 
 	// the result only depends on completed days, so it cannot change within a day
@@ -476,6 +481,11 @@ func (site *Site) restoreSettings() error {
 	}
 	if v, err := settings.Bool(keys.BatteryGridDischarge); err == nil {
 		if err := site.SetBatteryGridDischarge(v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
+			return err
+		}
+	}
+	if v, err := settings.Float(keys.BatteryPVStartPower); err == nil {
+		if err := site.SetBatteryPVStartPower(v); err != nil {
 			return err
 		}
 	}
@@ -1266,10 +1276,15 @@ func (site *Site) update(lp updater) {
 	site.applyHemsLimits()
 
 	site.batteryPVCharge = nil
+	site.batteryPVSetpoints = nil
 	if state, err := site.updateMeters(); err != nil {
 		site.log.ERROR.Println(err)
 	} else {
-		site.batteryPVCharge = site.activePVBatteryCharging(state)
+		site.batteryPVSetpoints = site.dynamicPVBatteryCharging(state)
+		site.batteryPVCharge = make(map[string]bool)
+		for name := range site.batteryPVSetpoints {
+			site.batteryPVCharge[name] = true
+		}
 		if sponsor.IsAuthorized() && optimizerEnabled() {
 			site.reapplySuggestions(time.Now())
 		} else {
@@ -1409,10 +1424,19 @@ func (site *Site) prepare() {
 	site.publish(keys.BufferSoc, site.bufferSoc)
 	site.publish(keys.BufferStartSoc, site.bufferStartSoc)
 	site.publish(keys.BatteryMode, site.batteryMode)
+	pvChargeSupported := false
+	for _, dev := range site.batteryMeters {
+		if api.HasCap[api.BatteryChargePowerController](dev.Instance()) {
+			pvChargeSupported = true
+			break
+		}
+	}
+	site.publish(keys.BatteryPVChargingSupported, pvChargeSupported)
 	site.publish(keys.BatteryDischargeControl, site.batteryDischargeControl)
 	site.publish(keys.BatteryGridDischarge, site.batteryGridDischarge)
 	site.publish(keys.SolarAdjusted, site.solarAdjusted)
 	site.publish(keys.ResidualPower, site.GetResidualPower())
+	site.publish(keys.BatteryPVStartPower, site.GetBatteryPVStartPower())
 	site.publish(keys.GridExportLimit, site.GetGridExportLimit())
 	site.publish(keys.ProfilePercentile, site.GetProfilePercentile())
 	site.publish(keys.SmartCostAvailable, site.isDynamicTariff(api.TariffUsagePlanner))

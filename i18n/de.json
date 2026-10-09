@@ -64,7 +64,9 @@
       },
       "priority": "Hausbatterie hat Vorrang, solange sie unter {soc} liegt. Dann erhalten die Ladepunkte den Überschuss.",
       "priorityNone": "Sonnenüberschuss geht direkt an die Ladepunkte. Setze einen Wert über {soc}, um die Hausbatterie zu bevorzugen.",
-      "priorityTitle": "Wohin geht der Überschuss zuerst?"
+      "priorityTitle": "Wohin geht der Überschuss zuerst?",
+      "pvStartPowerTitle": "Aktive PV-Batterieladung starten ab",
+      "pvStartPowerHelp": "EVCC startet die aktive Batterieladung, sobald ungenutzter Solarüberschuss diesen Wert erreicht. Danach wird auch unterhalb dieser Schwelle weitergeladen, solange nutzbarer Überschuss vorhanden ist. Eine bereits selbstständig ladende Batterie wird berücksichtigt."
     },
     "optimizer": {
       "action": {

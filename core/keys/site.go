@@ -19,6 +19,7 @@ const (
 	PvEnergy              = "pvEnergy"
 	PvPower               = "pvPower"
 	ResidualPower         = "residualPower"
+	BatteryPVStartPower   = "batteryPVStartPower"
 	SiteTitle             = "siteTitle"
 	SmartCostType         = "smartCostType"
 	Statistics            = "statistics"
@@ -48,6 +49,7 @@ const (
 	// battery settings
 	BatteryDischargeControl    = "batteryDischargeControl"
 	BatteryGridChargeLimit     = "batteryGridChargeLimit"
+	BatteryPVChargingSupported = "batteryPVChargingSupported"
 	BatteryGridChargeActive    = "batteryGridChargeActive"
 	BatteryGridDischargeLimit  = "batteryGridDischargeLimit"
 	BatteryGridDischargeActive = "batteryGridDischargeActive"
