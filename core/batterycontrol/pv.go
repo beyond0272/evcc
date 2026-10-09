@@ -30,8 +30,11 @@ const (
 
 // Input contains current site measurements, settings and arbitration outcome.
 type Input struct {
-	Valid, Allowed       bool
-	Grid, PV, Reserve    float64
+	Valid, Allowed    bool
+	Grid, PV, Reserve float64
+	// UnavailablePower excludes other battery discharge and newly allocated loads
+	// from the PV budget without mistaking those estimates for measured grid import.
+	UnavailablePower     float64
 	StartPower, MaxPower float64
 	MaxSoc               float64
 }
@@ -134,6 +137,7 @@ func (s *Session) Step(reader api.BatteryControlStateReader, ctrl api.BatteryPVL
 		}
 	}
 	valid := in.Valid && finite(in.Grid) && finite(in.PV) && in.PV > 0 && finite(in.Reserve) && in.Reserve >= 0 &&
+		finite(in.UnavailablePower) && in.UnavailablePower >= 0 &&
 		finite(in.StartPower) && in.StartPower > 0 && finite(in.MaxPower) && in.MaxPower > 0 &&
 		finite(in.MaxSoc) && in.MaxSoc > 0 && in.MaxSoc <= 100
 	if !valid || !in.Allowed || state.Soc >= in.MaxSoc {
@@ -143,14 +147,20 @@ func (s *Session) Step(reader api.BatteryControlStateReader, ctrl api.BatteryPVL
 		s.transition(Observing, "no safe charging budget or higher-priority control")
 		return nil
 	}
+	if owned && in.Grid > 0 {
+		// The start threshold is not a stop threshold. Actual grid import is:
+		// release now, rather than continuing forced charging at a lower setpoint.
+		return s.Stop(ctrl, "grid import detected")
+	}
 	charge := max(0, -state.Power)
-	export := -in.Grid - max(0, state.Power)
+	budgetGrid := in.Grid + in.UnavailablePower
+	export := -budgetGrid - max(0, state.Power)
 	if !owned && export < in.StartPower {
 		s.transition(Observing, "below start threshold")
 		return nil
 	}
 	target := math.Floor(min(in.MaxPower, in.PV, max(0, charge+export-in.Reserve)))
-	if owned && in.Grid <= 0 && in.Grid >= -in.Reserve {
+	if owned && budgetGrid <= 0 && budgetGrid >= -in.Reserve {
 		// Keep the setting around zero/export reserve instead of integrating measurement noise.
 		target = min(s.power, in.MaxPower, in.PV)
 	}

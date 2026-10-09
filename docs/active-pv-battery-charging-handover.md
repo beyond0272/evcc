@@ -1,3 +1,21 @@
+# Start/stop rule clarification — 9 October 2026
+
+Implemented and tested: start at the configurable export threshold (default
+500 W), independently of maximum charge power. Subtract the 100 W reserve after
+the threshold check. Continue below the start threshold, including at zero grid
+power; release on the first valid positive grid-import measurement or at the SoC
+limit. Existing fault and safety stops still apply. Maximum charge power only
+caps the requested watts. Distinguish measured grid power from budget adjustments
+for other batteries.
+
+Agreed next ownership revision: durable action journal, startup reconciliation,
+and a persistent GUI conflict prompt for unexplained manual control. These are
+not implemented yet; the current device-lease guard remains. A return to automatic
+operation is not evidence of somebody else taking manual control. The historical
+hardware-lease-only requirement below is superseded by this agreed direction.
+
+---
+
 # Ownership-aware implementation update — 9 October 2026
 
 Development continues from `e04a3b5e2`; the previous local, unpushed variant was

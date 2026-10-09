@@ -131,21 +131,74 @@ func TestPVStartContinueBalanceImportStop(t *testing.T) {
 	in.Grid = -100
 	require.NoError(t, s.Step(d, d, in))
 	require.Equal(t, 400.0, s.Power())
-	in.Grid = 100
-	require.NoError(t, s.Step(d, d, in))
-	require.Equal(t, 200.0, s.Power())
-	d.state.Power = -200
 	in.Grid = -200
 	require.NoError(t, s.Step(d, d, in))
-	require.Equal(t, 300.0, s.Power())
-	d.state.Power = -300
-	in.Grid = 400
+	require.Equal(t, 500.0, s.Power())
+	d.state.Power = -500
+	in.Grid = 1
 	require.NoError(t, s.Step(d, d, in))
 	require.Equal(t, Observing, s.Phase)
 	require.Equal(t, "10", d.state.NativeMode)
 	in.Grid = -499
 	require.NoError(t, s.Step(d, d, in))
 	require.Equal(t, Observing, s.Phase)
+}
+
+func TestPVStartThresholdIndependentOfChargeLimit(t *testing.T) {
+	for _, limit := range []float64{200, 3300, 3500, 10000} {
+		d := newDevice()
+		s := session(d)
+		in := inputs()
+		in.MaxPower = limit
+		in.Grid = -499
+		require.NoError(t, s.Step(d, d, in))
+		require.Empty(t, d.calls)
+		in.Grid = -500
+		require.NoError(t, s.Step(d, d, in))
+		require.Equal(t, min(400.0, limit), s.Power())
+	}
+}
+
+func TestPVContinuesBelowStartThresholdUntilFullOrImport(t *testing.T) {
+	for _, stop := range []string{"full", "import"} {
+		t.Run(stop, func(t *testing.T) {
+			d := newDevice()
+			s := session(d)
+			in := inputs()
+			require.NoError(t, s.Step(d, d, in))
+			d.state.Power = -400
+			d.state.Soc = 99.9
+			for _, grid := range []float64{-100, -50, -1, 0} {
+				in.Grid = grid
+				require.NoError(t, s.Step(d, d, in))
+				require.Equal(t, Active, s.Phase)
+				require.Equal(t, 400.0, s.Power())
+			}
+			commands := len(d.targets)
+			if stop == "full" {
+				d.state.Soc = 100
+			} else {
+				in.Grid = 0.1
+			}
+			require.NoError(t, s.Step(d, d, in))
+			require.Equal(t, Observing, s.Phase)
+			require.Equal(t, "release", d.calls[len(d.calls)-1])
+			require.Len(t, d.targets, commands, "no further charging command before release")
+		})
+	}
+}
+
+func TestPVBudgetAdjustmentIsNotMeasuredGridImport(t *testing.T) {
+	d := newDevice()
+	s := session(d)
+	in := inputs()
+	require.NoError(t, s.Step(d, d, in))
+	d.state.Power = -400
+	in.Grid = -100
+	in.UnavailablePower = 150
+	require.NoError(t, s.Step(d, d, in))
+	require.Equal(t, Active, s.Phase)
+	require.Equal(t, 250.0, s.Power())
 }
 func TestPVLimitsAndPriority(t *testing.T) {
 	for _, tc := range []struct {

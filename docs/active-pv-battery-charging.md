@@ -58,8 +58,11 @@ For a device meeting that contract:
 - While active, calculate measured charging power + usable export - reserve,
   capped by PV production and the configured charge-power limit.
 - Between zero grid import and the export reserve, hold the previous setting.
-- Positive grid import reduces the request or releases control; falling below
-  the start threshold alone does not stop an already active session.
+- Any valid positive measured grid import releases control immediately in that
+  control cycle; no smaller charging command is sent first. Zero grid power keeps
+  the current request. Falling below 500 W export alone does not stop charging.
+- Charge-power limits cap the request only; they never set the start threshold.
+  Budget reservations for other batteries are not measured grid import.
 - SoC limit, invalid measurements, missing PV, HEMS limits, tariff control,
   external requests or fast EV charging end the session through fenced release.
 - No arbitrary 80% taper. The existing sonnen charge limit remains 3300 W.
@@ -69,6 +72,21 @@ identical device timestamps do not refresh sample age (10-second maximum for
 control). The timestamp is used as a change marker, not parsed as a trusted UTC
 clock: an old response on the very first read cannot be dated reliably. This is
 an additional reason that observation alone must never establish ownership.
+
+## Agreed next ownership revision (not implemented yet)
+
+The next ownership design will use a durable write-ahead action journal and
+startup reconciliation, plus a persistent GUI conflict lock requiring user
+interaction. Unknown manual operation must not be overwritten; automatic native
+charging must remain untouched. An unexpected return to automatic operation ends
+our session and is not itself evidence of a foreign manual controller. Measured
+charge power differing from a requested setpoint is not proof of a conflict.
+
+This agreement supersedes the earlier requirement to solve all ownership through
+a hardware lease before proceeding. The current code still uses the lease guard;
+the journal and GUI confirmation flow have not been implemented by the threshold
+correction. A journal enables recovery after restart but cannot issue a stop while
+the evcc host is powered off. That limitation remains separate and explicit.
 
 ## Verification and next hardware requirement
 

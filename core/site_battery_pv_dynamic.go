@@ -73,8 +73,9 @@ func (site *Site) updatePVBatteryControl(state siteState, valid, allowed bool) {
 		}
 		before, reason := session.Phase, session.Reason
 		input := batterycontrol.Input{
-			Valid: valid, Allowed: allowed, Grid: grid + totalDischarge - discharges[name] + allocated,
-			PV: max(0, pv-allocated), Reserve: max(100, site.GetResidualPower()),
+			Valid: valid, Allowed: allowed, Grid: grid,
+			UnavailablePower: totalDischarge - discharges[name] + allocated,
+			PV:               max(0, pv-allocated), Reserve: max(100, site.GetResidualPower()),
 			StartPower: site.GetBatteryPVStartPower(), MaxPower: maxPower, MaxSoc: maxSoc,
 		}
 		if err := session.Step(reader, ctrl, input); err != nil {
