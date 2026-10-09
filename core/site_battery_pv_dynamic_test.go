@@ -1,301 +1,148 @@
 package core
 
 import (
-	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/evcc-io/evcc/api"
+	"github.com/evcc-io/evcc/core/batterycontrol"
+	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
 	"github.com/stretchr/testify/require"
 )
 
-type pvDynamicBattery struct {
-	pvChargingBattery
-	targets []float64
+type observedPVBattery struct {
+	state  api.BatteryControlState
+	writes []api.BatteryMode
 }
 
-func (b *pvDynamicBattery) SetBatteryChargePower(power float64) error {
-	b.targets = append(b.targets, power)
+func (b *observedPVBattery) CurrentPower() (float64, error) { return b.state.Power, nil }
+func (b *observedPVBattery) Soc() (float64, error)          { return b.state.Soc, nil }
+func (b *observedPVBattery) BatteryModes() []api.BatteryMode {
+	return []api.BatteryMode{api.BatteryNormal, api.BatteryCharge}
+}
+func (b *observedPVBattery) SetBatteryMode(m api.BatteryMode) error {
+	b.writes = append(b.writes, m)
 	return nil
 }
-
-func TestDynamicPVBatteryCharging(t *testing.T) {
-	b := &pvDynamicBattery{
-		pvChargingBattery: pvChargingBattery{
-			soc:   21,
-			limit: 3300,
-			modes: []api.BatteryMode{
-				api.BatteryNormal,
-				api.BatteryCharge,
-			},
-		},
-	}
-
-	site := pvChargingSite(&b.pvChargingBattery)
-	site.batteryMeters = []config.Device[api.Meter]{
-		config.NewStaticDevice[api.Meter](
-			config.Named{Name: "battery"}, b,
-		),
-	}
-
-	grid := &pvChargingBattery{}
-	site.gridMeter = config.NewStaticDevice[api.Meter](
-		config.Named{Name: "grid"}, grid,
-	)
-
-	site.BatteryPVStartPower = 500
-	site.ResidualPower = 100
-
-	step := func(gridPower, pvPower, batteryPower float64) {
-		grid.power = gridPower
-		b.power = batteryPower
-
-		state := siteState{
-			gridPower: gridPower,
-			pvPower:   pvPower,
-		}
-
-		site.batteryPVSetpoints =
-			site.dynamicPVBatteryCharging(state)
-
-		site.batteryPVCharge = make(map[string]bool)
-		for name := range site.batteryPVSetpoints {
-			site.batteryPVCharge[name] = true
-		}
-
-		site.updateBatteryMode(false, false, api.Rate{})
-	}
-
-	// First start: 2530W export, 100W reserve.
-	step(-2530, 2830, 0)
-	require.Equal(t, []float64{2430}, b.targets)
-	require.Empty(t, b.applied,
-		"PV charging must not invoke fixed BatteryCharge mode")
-
-	// Cloud: remain active below 500W start threshold.
-	step(-100, 450, -300)
-	require.Equal(t, []float64{2430, 300}, b.targets)
-	require.Empty(t, b.applied)
-
-	// No usable surplus: restore normal battery mode.
-	step(400, 100, -300)
-	require.Equal(t, api.BatteryNormal,
-		b.applied[len(b.applied)-1])
+func (b *observedPVBattery) SetBatteryChargePower(p float64) error {
+	panic("unfenced charge must not run")
 }
-
-type pvDynamicFailBattery struct {
-	pvDynamicBattery
+func (b *observedPVBattery) BatteryControlState() (api.BatteryControlState, error) {
+	s := b.state
+	s.ObservedAt = time.Now()
+	return s, nil
 }
-
-func (b *pvDynamicFailBattery) SetBatteryChargePower(power float64) error {
-	return errors.New("simulated sonnen communication failure")
+func guardedSite(b *observedPVBattery) *Site {
+	grid := &observedPVBattery{state: api.BatteryControlState{Power: -1000}}
+	pv := &observedPVBattery{state: api.BatteryControlState{Power: 2000}}
+	s := NewSite()
+	s.log = util.NewLogger("test")
+	s.gridMeter = config.NewStaticDevice[api.Meter](config.Named{Name: "grid"}, grid)
+	s.pvMeters = []config.Device[api.Meter]{config.NewStaticDevice[api.Meter](config.Named{Name: "pv"}, pv)}
+	s.batteryMeters = []config.Device[api.Meter]{config.NewStaticDevice[api.Meter](config.Named{Name: "battery"}, b)}
+	return s
 }
-
-func TestDynamicPVBatteryChargingRollback(t *testing.T) {
-	b := &pvDynamicFailBattery{
-		pvDynamicBattery: pvDynamicBattery{
-			pvChargingBattery: pvChargingBattery{
-				soc:   21,
-				limit: 3300,
-				modes: []api.BatteryMode{
-					api.BatteryNormal,
-					api.BatteryCharge,
-				},
-			},
-		},
-	}
-
-	site := pvChargingSite(&b.pvChargingBattery)
-	site.batteryMeters = []config.Device[api.Meter]{
-		config.NewStaticDevice[api.Meter](
-			config.Named{Name: "battery"}, b,
-		),
-	}
-
-	site.batteryPVSetpoints = map[string]float64{
-		"battery": 1000,
-	}
-	site.batteryPVCharge = map[string]bool{
-		"battery": true,
-	}
-
-	site.updateBatteryMode(false, false, api.Rate{})
-
-	require.Equal(t,
-		[]api.BatteryMode{api.BatteryNormal},
-		b.applied,
-		"communication failure must trigger normal mode",
-	)
-	require.True(t, site.batteryPVChargePending)
-}
-
 func TestDynamicPVRespectsNativeCharging(t *testing.T) {
-	b := &pvDynamicBattery{
-		pvChargingBattery: pvChargingBattery{
-			power: -900,
-			soc:   25,
-			limit: 3300,
-			modes: []api.BatteryMode{
-				api.BatteryNormal,
-				api.BatteryCharge,
-			},
-		},
+	b := &observedPVBattery{state: api.BatteryControlState{Mode: api.BatteryOperatingAuto, Soc: 50, Power: -900}}
+	s := guardedSite(b)
+	for range 5 {
+		s.updatePVBatteryControl(siteState{gridPower: -1000, pvPower: 2000}, true, true)
+		s.updateBatteryMode(false, false, api.Rate{})
 	}
-
-	s := pvChargingSite(&b.pvChargingBattery)
-	s.batteryMeters = []config.Device[api.Meter]{
-		config.NewStaticDevice[api.Meter](
-			config.Named{Name: "battery"}, b,
-		),
-	}
-
-	grid := &pvChargingBattery{power: -40}
-	s.gridMeter = config.NewStaticDevice[api.Meter](
-		config.Named{Name: "grid"}, grid,
-	)
-
-	s.BatteryPVStartPower = 500
-	s.ResidualPower = 100
-
-	// Sonnen already uses the available PV energy.
-	result := s.dynamicPVBatteryCharging(siteState{
-		gridPower: -40,
-		pvPower:   1500,
-	})
-	require.Empty(t, result)
-
-	// Sonnen continues charging, but leaves 800W unused.
-	grid.power = -800
-	state := siteState{
-		gridPower: -800,
-		pvPower:   2200,
-	}
-
-	// First observation: don't intervene yet.
-	require.Empty(t, s.dynamicPVBatteryCharging(state))
-
-	// Second observation: take over unused surplus.
-	result = s.dynamicPVBatteryCharging(state)
-	require.Equal(t, 1600.0, result["battery"])
-
-	s.batteryPVSetpoints = result
-	s.batteryPVCharge = map[string]bool{"battery": true}
-	s.updateBatteryMode(false, false, api.Rate{})
-
-	require.Equal(t, []float64{1600}, b.targets)
-	require.Empty(t, b.applied,
-		"must not request fixed-power BatteryCharge mode")
+	require.Empty(t, b.writes)
+	require.Equal(t, batterycontrol.Native, s.batteryPVSessions["battery"].Phase)
 }
-
-func TestDynamicPVToGridCharging(t *testing.T) {
-	b := &pvDynamicBattery{
-		pvChargingBattery: pvChargingBattery{
-			soc:   25,
-			limit: 3300,
-			modes: []api.BatteryMode{
-				api.BatteryNormal,
-				api.BatteryCharge,
-			},
-		},
-	}
-
-	s := pvChargingSite(&b.pvChargingBattery)
-	s.batteryMeters = []config.Device[api.Meter]{
-		config.NewStaticDevice[api.Meter](
-			config.Named{Name: "battery"}, b,
-		),
-	}
-
-	s.batteryPVSetpoints = map[string]float64{"battery": 1000}
-	s.batteryPVCharge = map[string]bool{"battery": true}
-
-	// PV charging must use the dynamic power setter.
-	s.updateBatteryMode(false, false, api.Rate{})
-	require.Equal(t, []float64{1000}, b.targets)
-	require.Empty(t, b.applied)
-
-	// Grid charging now takes priority.
-	s.batteryPVSetpoints = nil
-	s.batteryPVCharge = nil
+func TestDynamicPVManualRestartAndShutdown(t *testing.T) {
+	b := &observedPVBattery{state: api.BatteryControlState{Mode: api.BatteryOperatingManual, Soc: 50, Power: -900}}
+	s := guardedSite(b)
+	s.updatePVBatteryControl(siteState{gridPower: -1000, pvPower: 2000}, true, true)
+	s.batteryMode = api.BatteryCharge
+	s.stopPVBatteryControl()
+	require.NoError(t, s.applyBatteryMode(api.BatteryNormal))
+	require.Empty(t, b.writes)
+	require.Equal(t, batterycontrol.Foreign, s.batteryPVSessions["battery"].Phase)
+}
+func TestDynamicPVNoUnsafeFallback(t *testing.T) {
+	b := &observedPVBattery{state: api.BatteryControlState{Mode: api.BatteryOperatingAuto, Soc: 50}}
+	s := guardedSite(b)
+	s.updatePVBatteryControl(siteState{gridPower: -1000, pvPower: 2000}, true, true)
 	s.updateBatteryMode(true, false, api.Rate{})
-
-	require.Equal(t,
-		[]api.BatteryMode{api.BatteryCharge},
-		b.applied,
-		"grid charging must explicitly restore the fixed charge mode",
-	)
-	require.False(t, s.batteryPVChargeActive)
+	require.Empty(t, b.writes)
+	require.Equal(t, batterycontrol.Blocked, s.batteryPVSessions["battery"].Phase)
 }
 
-// A failed charge command followed by a failed rollback must prevent
-// further PV charging until normal mode has been restored successfully.
-func TestDynamicPVRecoveryLockout(t *testing.T) {
-	b := &pvDynamicFailBattery{
-		pvDynamicBattery: pvDynamicBattery{
-			pvChargingBattery: pvChargingBattery{
-				soc:    25,
-				limit:  3300,
-				setErr: errors.New("simulated rollback failure"),
-				modes: []api.BatteryMode{
-					api.BatteryNormal,
-					api.BatteryCharge,
-				},
-			},
-		},
-	}
+func TestDynamicPVShutdownBlocksLaterUpdates(t *testing.T) {
+	b := &observedPVBattery{state: api.BatteryControlState{Mode: api.BatteryOperatingAuto, Soc: 50}}
+	s := guardedSite(b)
+	s.stopPVBatteryControl()
+	s.updatePVBatteryControl(siteState{gridPower: -1000, pvPower: 2000}, true, true)
+	require.Empty(t, s.batteryPVSessions)
+	require.Empty(t, b.writes)
+}
 
-	s := pvChargingSite(&b.pvChargingBattery)
+// This fake enforces the future adapter contract; it is not a sonnen emulator.
+type leasedPVBattery struct {
+	observedPVBattery
+	target float64
+}
+
+func (b *leasedPVBattery) GetPowerLimits() (float64, float64) { return 3300, 3300 }
+func (b *leasedPVBattery) AcquireBatteryPVControl(id string, power float64, ttl time.Duration) error {
+	if b.state.Mode != api.BatteryOperatingAuto || b.state.Power < 0 || b.state.NativeCharging || b.state.LeaseID != "" {
+		return fmt.Errorf("foreign control")
+	}
+	b.state.Mode = api.BatteryOperatingManual
+	b.state.LeaseID = id
+	return b.RenewBatteryPVControl(id, power, ttl)
+}
+func (b *leasedPVBattery) RenewBatteryPVControl(id string, power float64, ttl time.Duration) error {
+	if b.state.LeaseID != id {
+		return fmt.Errorf("foreign control")
+	}
+	b.state.LeaseUntil = time.Now().Add(ttl)
+	b.target = power
+	return nil
+}
+func (b *leasedPVBattery) ReleaseBatteryPVControl(id string) error {
+	if b.state.LeaseID == id {
+		b.state.LeaseID = ""
+		b.state.Mode = api.BatteryOperatingAuto
+		b.target = 0
+	}
+	return nil
+}
+func TestDynamicPVAllocatesMeasuredBudgetAndReleases(t *testing.T) {
+	a := &leasedPVBattery{observedPVBattery: observedPVBattery{state: api.BatteryControlState{Mode: api.BatteryOperatingAuto, Soc: 50}}}
+	b := &leasedPVBattery{observedPVBattery: observedPVBattery{state: api.BatteryControlState{Mode: api.BatteryOperatingAuto, Soc: 50}}}
+	s := guardedSite(&a.observedPVBattery)
 	s.batteryMeters = []config.Device[api.Meter]{
-		config.NewStaticDevice[api.Meter](
-			config.Named{Name: "battery"}, b,
-		),
+		config.NewStaticDevice[api.Meter](config.Named{Name: "a"}, a),
+		config.NewStaticDevice[api.Meter](config.Named{Name: "b"}, b),
 	}
-
-	grid := &pvChargingBattery{power: -1500}
-	s.gridMeter = config.NewStaticDevice[api.Meter](
-		config.Named{Name: "grid"}, grid,
-	)
-
-	s.BatteryPVStartPower = 500
-	s.ResidualPower = 100
-
-	s.batteryPVSetpoints = map[string]float64{"battery": 1000}
-	s.batteryPVCharge = map[string]bool{"battery": true}
-
-	// Charging fails, and immediate rollback also fails.
-	s.updateBatteryMode(false, false, api.Rate{})
-
-	require.True(t, s.batteryPVRecoveryRequired)
-	require.Equal(t,
-		[]api.BatteryMode{api.BatteryNormal},
-		b.applied,
-	)
-
-	state := siteState{
-		gridPower: -1500,
-		pvPower:   1800,
-	}
-
-	// PV surplus exists, but recovery blocks new requests.
-	require.Empty(t, s.dynamicPVBatteryCharging(state))
-
-	s.batteryPVSetpoints = nil
-	s.batteryPVCharge = nil
-
-	// Recovery still fails.
-	s.updateBatteryMode(false, false, api.Rate{})
-	require.True(t, s.batteryPVRecoveryRequired)
-	require.Len(t, b.applied, 2)
-
-	// Communication is restored.
-	b.setErr = nil
-	s.updateBatteryMode(false, false, api.Rate{})
-
-	require.False(t, s.batteryPVRecoveryRequired)
-	require.Equal(t, api.BatteryNormal, b.applied[len(b.applied)-1])
-	require.Len(t, b.applied, 3)
-
-	// PV charging may now resume.
-	result := s.dynamicPVBatteryCharging(state)
-	require.Equal(t, 1400.0, result["battery"])
+	state := siteState{gridPower: -1000, pvPower: 2000}
+	s.updatePVBatteryControl(state, true, true)
+	require.Equal(t, 900.0, a.target)
+	require.Zero(t, b.target)
+	// The first battery has not yet reached the request: reserve the entire
+	// measured-to-request delta, not merely the change in requested power.
+	a.state.Power = -100
+	s.updatePVBatteryControl(state, true, true)
+	require.Equal(t, 1000.0, a.target)
+	require.Zero(t, b.target)
+	s.updatePVBatteryControl(state, false, true)
+	require.Zero(t, a.target)
+	require.Equal(t, api.BatteryOperatingAuto, a.state.Mode)
+	a.state.Power = 0
+	s.updatePVBatteryControl(state, true, true)
+	require.Positive(t, a.target)
+	s.updatePVBatteryControl(state, true, false)
+	require.Zero(t, a.target)
+	s.updatePVBatteryControl(state, true, true)
+	require.Positive(t, a.target)
+	s.stopPVBatteryControl()
+	require.Zero(t, a.target)
+	require.Empty(t, a.writes)
+	require.Empty(t, b.writes)
 }

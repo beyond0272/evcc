@@ -26,6 +26,7 @@
 						:battery-discharge-control="state.batteryDischargeControl"
 						:battery-pv-start-power="state.batteryPVStartPower ?? 500"
 						:battery-pv-charging-supported="state.batteryPVChargingSupported"
+						:battery-pv-control-unavailable="state.batteryPVControlUnavailable"
 						:battery-grid-discharge="state.batteryGridDischarge"
 						:battery="state.battery"
 						:experimental="state.experimental"

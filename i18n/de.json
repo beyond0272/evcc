@@ -66,6 +66,7 @@
       "priorityNone": "Sonnenüberschuss geht direkt an die Ladepunkte. Setze einen Wert über {soc}, um die Hausbatterie zu bevorzugen.",
       "priorityTitle": "Wohin geht der Überschuss zuerst?",
       "pvStartPowerTitle": "Aktive PV-Batterieladung starten ab",
+      "pvControlUnavailable": "Aktive PV-Ladung für mindestens einen Speicher gesperrt: Seine Anbindung unterstützt noch keine sichere Übernahme und automatische Rückgabe der Steuerung. EVCC beobachtet diesen Speicher nur; auch andere EVCC-Batteriebefehle sind für ihn gesperrt.",
       "pvStartPowerHelp": "EVCC startet die aktive Batterieladung, sobald ungenutzter Solarüberschuss diesen Wert erreicht. Danach wird auch unterhalb dieser Schwelle weitergeladen, solange nutzbarer Überschuss vorhanden ist. Eine bereits selbstständig ladende Batterie wird berücksichtigt."
     },
     "optimizer": {

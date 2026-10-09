@@ -5642,6 +5642,51 @@
             "description": "Configured grid operating point in W. Positive values maintain grid import.",
             "type": "number"
           },
+          "batteryPVStartPower": {
+            "description": "Start threshold for active home battery PV charging in W.",
+            "type": "number"
+          },
+          "batteryPVChargingSupported": {
+            "description": "At least one battery supports device-enforced ownership and expiry for PV charging.",
+            "type": "boolean"
+          },
+          "batteryPVControlUnavailable": {
+            "type": "boolean"
+          },
+          "batteryPVControl": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "power": {
+                  "type": "number"
+                },
+                "actualMode": {
+                  "type": "string"
+                },
+                "nativeMode": {
+                  "type": "string"
+                },
+                "actualPower": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "state",
+                "reason",
+                "power",
+                "actualMode",
+                "nativeMode",
+                "actualPower"
+              ]
+            }
+          },
           "gridExportLimit": {
             "description": "Static grid export power limit in W used as optimizer constraint, 0 = disabled. An active HEMS curtailment takes precedence.",
             "type": "number"

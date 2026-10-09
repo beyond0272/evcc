@@ -61,21 +61,7 @@ func (site *Site) fromTo(requested, m api.BatteryMode) bool {
 }
 
 func (site *Site) updateBatteryMode(batteryGridChargeActive, batteryGridDischargeActive bool, rate api.Rate) {
-	wasPVActive := site.batteryPVChargeActive
 	batteryMode := site.requiredBatteryMode(batteryGridChargeActive, batteryGridDischargeActive, rate)
-
-	// A dynamic PV setpoint and fixed grid charging both appear as
-	// BatteryCharge. Force reapplication when grid charging takes over.
-	if wasPVActive && !site.batteryPVChargeActive &&
-		batteryGridChargeActive && batteryMode == api.BatteryUnknown &&
-		site.GetBatteryModeExternal() == api.BatteryUnknown {
-		batteryMode = api.BatteryCharge
-		for name, applied := range site.batteryModeApplied {
-			if applied == api.BatteryCharge {
-				delete(site.batteryModeApplied, name)
-			}
-		}
-	}
 
 	// put battery into hold mode when charging is active and HEMS dimmed
 	if dimmed := hems.Dimmed(site.hems); site.fromTo(batteryMode, api.BatteryCharge) && dimmed != nil && *dimmed {
@@ -93,16 +79,6 @@ func (site *Site) updateBatteryMode(batteryGridChargeActive, batteryGridDischarg
 	// validate max soc / min soc reserve
 	if modeChanged := batteryMode != api.BatteryUnknown; modeChanged || site.batteryMode == api.BatteryCharge || site.batteryMode == api.BatteryDischarge {
 		if err := site.applyBatteryMode(batteryMode); err == nil {
-			if site.batteryPVRecoveryRequired && batteryMode == api.BatteryNormal {
-				site.batteryPVRecoveryRequired = false
-				site.log.INFO.Println("active PV battery charging: recovery completed")
-			}
-			if !site.batteryPVChargeActive {
-				site.batteryPVChargePending = false
-			}
-			if wasPVActive && !site.batteryPVChargeActive {
-				site.log.INFO.Printf("active PV battery charging: released control, requested mode: %s", batteryMode)
-			}
 			if modeChanged {
 				site.SetBatteryMode(batteryMode)
 			}
@@ -115,7 +91,6 @@ func (site *Site) updateBatteryMode(batteryGridChargeActive, batteryGridDischarg
 // requiredBatteryMode determines required battery mode based on grid charge/discharge and rate
 func (site *Site) requiredBatteryMode(batteryGridChargeActive, batteryGridDischargeActive bool, rate api.Rate) api.BatteryMode {
 	var res api.BatteryMode
-	site.batteryPVChargeActive = false
 	batMode := site.GetBatteryMode()
 	extMode := site.GetBatteryModeExternal()
 
@@ -141,8 +116,6 @@ func (site *Site) requiredBatteryMode(batteryGridChargeActive, batteryGridDischa
 		if extMode != batMode {
 			res = extMode
 		}
-	case site.batteryPVRecoveryRequired:
-		res = api.BatteryNormal
 	case batteryGridChargeActive:
 		// independent limits (buy vs feed-in rate) can both be active at once;
 		// charge wins to avoid buying and immediately selling
@@ -156,11 +129,7 @@ func (site *Site) requiredBatteryMode(batteryGridChargeActive, batteryGridDischa
 		res = keepUnlessModified(api.BatteryHold)
 	case batteryGridDischargeActive:
 		res = keepUnlessModified(api.BatteryDischarge)
-	case len(site.batteryPVCharge) > 0:
-		site.batteryPVChargeActive = true
-		site.batteryPVChargePending = true
-		res = keepUnlessModified(api.BatteryCharge)
-	case site.batteryPVChargePending || batteryModeModified(batMode):
+	case batteryModeModified(batMode):
 		res = api.BatteryNormal
 	}
 
@@ -232,7 +201,6 @@ func supportedBatteryMode(supported []api.BatteryMode, mode api.BatteryMode) api
 // is decided per device, so one battery reaching its bound does not force the
 // others into hold.
 func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
-	var pvErrors []error
 	fromToCharge := site.fromTo(mode, api.BatteryCharge)
 	fromToDischarge := site.fromTo(mode, api.BatteryDischarge)
 
@@ -243,6 +211,11 @@ func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 	for _, dev := range site.batteryMeters {
 		meter := dev.Instance()
 
+		// Guarded devices use fenced sessions exclusively; legacy writes bypass ownership.
+		if api.HasCap[api.BatteryControlStateReader](meter) || api.HasCap[api.BatteryPVLeaseController](meter) || api.HasCap[api.BatteryChargePowerController](meter) {
+			continue
+		}
+
 		batCtrl, ok := api.Cap[api.BatteryController](meter)
 		if !ok {
 			continue
@@ -250,63 +223,20 @@ func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 
 		// per-device mode so one battery reaching its soc bound does not affect the others
 		deviceMode := mode
-		if site.batteryPVChargeActive && fromToCharge {
-			deviceMode = api.BatteryNormal
-			if site.batteryPVCharge[dev.Config().Name] {
-				deviceMode = api.BatteryCharge
-			}
-		}
 
 		// hold at the soc bound of the requested mode (max soc for charge, min soc reserve for grid discharge)
-		if (fromToCharge || fromToDischarge) && deviceMode != api.BatteryHold && deviceMode != api.BatteryNormal {
+		if (fromToCharge || fromToDischarge) && deviceMode != api.BatteryHold {
 			hold, err := site.batterySocLimitReached(dev, fromToDischarge)
-			if err != nil && (site.batteryPVChargeActive || !errors.Is(err, api.ErrNotAvailable)) {
-				if !site.batteryPVChargeActive {
-					return err
-				}
-				pvErrors = append(pvErrors, err)
-				deviceMode = api.BatteryNormal
+			if err != nil && !errors.Is(err, api.ErrNotAvailable) {
+				return err
 			}
 			if hold {
 				deviceMode = api.BatteryHold
-				if site.batteryPVChargeActive {
-					deviceMode = api.BatteryNormal
-				}
 			}
 		}
 
 		if deviceMode == api.BatteryUnknown {
 			continue
-		}
-
-		// PV charging uses the dynamic watt setter, never the fixed
-		// BatteryCharge mode, which could request maximum grid charge.
-		if site.batteryPVChargeActive && fromToCharge &&
-			site.batteryPVSetpoints != nil &&
-			deviceMode == api.BatteryCharge {
-			name := dev.Config().Name
-			power, wanted := site.batteryPVSetpoints[name]
-			setter, supported := api.Cap[api.BatteryChargePowerController](meter)
-
-			if !wanted || !supported || !finiteBatteryPVValue(power) || power <= 0 {
-				deviceMode = api.BatteryNormal
-			} else {
-				if err := setter.SetBatteryChargePower(power); err != nil {
-					site.batteryPVRecoveryRequired = true
-					delete(site.batteryModeApplied, name)
-					pvErrors = append(pvErrors, err)
-					// Attempt immediate recovery from a partial HTTP sequence.
-					if rollbackErr := batCtrl.SetBatteryMode(api.BatteryNormal); rollbackErr != nil {
-						pvErrors = append(pvErrors, rollbackErr)
-					} else {
-						site.batteryModeApplied[name] = api.BatteryNormal
-					}
-				} else {
-					site.batteryModeApplied[name] = api.BatteryCharge
-					site.log.INFO.Printf("active PV battery charging: %s setpoint %.0fW", name, power)
-				}
-				continue
-			}
 		}
 
 		// an unsupported mode falls back to the closest supported one instead of leaving the battery in the mode applied before
@@ -327,12 +257,6 @@ func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 		deviceMode = applyMode
 
 		if err := batCtrl.SetBatteryMode(deviceMode); err != nil {
-			if site.batteryPVChargePending {
-				// A lost acknowledgement leaves the actual device mode unknown.
-				delete(site.batteryModeApplied, name)
-				pvErrors = append(pvErrors, err)
-				continue
-			}
 			if !errors.Is(err, api.ErrNotAvailable) {
 				return err
 			}
@@ -340,13 +264,10 @@ func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 		}
 
 		site.batteryModeApplied[name] = deviceMode
-		if site.batteryPVChargeActive || site.batteryPVCharge != nil {
-			site.log.INFO.Printf("active PV battery charging: set battery %s mode: %s", deviceTitleOrName(dev), deviceMode)
-		}
 		site.log.DEBUG.Printf("set battery %s mode: %s", deviceTitleOrName(dev), deviceMode)
 	}
 
-	return errors.Join(pvErrors...)
+	return nil
 }
 
 func (site *Site) tariffRates(usage api.TariffUsage) (api.Rates, error) {

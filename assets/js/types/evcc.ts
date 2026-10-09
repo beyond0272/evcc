@@ -227,8 +227,21 @@ export interface State {
   residualPower?: number;
   /** Start threshold for active home battery PV charging in W. */
   batteryPVStartPower?: number;
-  /** At least one battery supports dynamic PV charge power control. */
+  /** At least one battery supports device-enforced ownership and expiry for PV charging. */
   batteryPVChargingSupported?: boolean;
+  batteryPVControlUnavailable?: boolean;
+  batteryPVControl?: Record<
+    string,
+    {
+      state: string;
+      reason: string;
+      power: number;
+      actualMode: string;
+      nativeMode: string;
+      actualPower: number;
+    }
+  >;
+
   /** Static grid export power limit in W used as optimizer constraint, 0 = disabled. An active HEMS curtailment takes precedence. */
   gridExportLimit?: number;
   /** Percentile of the historic energy profiles used for demand prediction in %, e.g. 50 = median. Null uses the average. */

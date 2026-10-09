@@ -14,6 +14,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/cmd/shutdown"
+	"github.com/evcc-io/evcc/core/batterycontrol"
 	"github.com/evcc-io/evcc/core/circuit"
 	"github.com/evcc-io/evcc/core/coordinator"
 	"github.com/evcc-io/evcc/core/keys"
@@ -114,20 +115,17 @@ type Site struct {
 	// cached measurement state, guarded by RWMutex
 	siteState
 
-	batteryMaxDischargePower  *float64                   // Max discharge power of all battery meters
-	batteryMode               api.BatteryMode            // Battery mode (runtime only, not persisted)
-	batteryModeExternal       api.BatteryMode            // Battery mode (external, runtime only, not persisted)
-	batteryModeExternalTimer  time.Time                  // Battery mode timer for external control
-	batteryModeApplied        map[string]api.BatteryMode // Battery mode last applied per battery meter
-	batteryPVCharge           map[string]bool
-	batteryPVSetpoints        map[string]float64
-	batteryPVNativeSurplus    map[string]int
-	batteryPVChargeActive     bool
-	batteryPVChargePending    bool
-	batteryPVRecoveryRequired bool
-	suggestions               map[string]types.Suggestion // Optimizer suggestions by device key
-	suggestionActions         map[string]string           // last notified actionable optimizer action by device key
-	lastOptimizerSolve        *optimizerSolve             // last successful solve, reapplied to newer slots by the control cycle
+	batteryMaxDischargePower *float64                   // Max discharge power of all battery meters
+	batteryMode              api.BatteryMode            // Battery mode (runtime only, not persisted)
+	batteryModeExternal      api.BatteryMode            // Battery mode (external, runtime only, not persisted)
+	batteryModeExternalTimer time.Time                  // Battery mode timer for external control
+	batteryModeApplied       map[string]api.BatteryMode // Battery mode last applied per battery meter
+	batteryPVMu              sync.Mutex                 // serializes PV updates with shutdown
+	batteryPVStopped         bool
+	batteryPVSessions        map[string]*batterycontrol.Session
+	suggestions              map[string]types.Suggestion // Optimizer suggestions by device key
+	suggestionActions        map[string]string           // last notified actionable optimizer action by device key
+	lastOptimizerSolve       *optimizerSolve             // last successful solve, reapplied to newer slots by the control cycle
 
 	optimizerMu      sync.Mutex // guards optimizer runs
 	optimizerUpdated time.Time  // last optimizer run, guarded by optimizerMu
@@ -392,7 +390,8 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 
 	// revert battery mode on shutdown
 	shutdown.Register(func() {
-		if mode := site.GetBatteryMode(); batteryModeModified(mode) || site.batteryPVChargePending {
+		site.stopPVBatteryControl()
+		if mode := site.GetBatteryMode(); batteryModeModified(mode) {
 			if err := site.applyBatteryMode(api.BatteryNormal); err != nil {
 				site.log.ERROR.Println("battery mode:", err)
 			}
@@ -1275,16 +1274,12 @@ func (site *Site) update(lp updater) {
 	site.updateCircuits()
 	site.applyHemsLimits()
 
-	site.batteryPVCharge = nil
-	site.batteryPVSetpoints = nil
+	var pvState siteState
+	var pvValid bool
 	if state, err := site.updateMeters(); err != nil {
 		site.log.ERROR.Println(err)
 	} else {
-		site.batteryPVSetpoints = site.dynamicPVBatteryCharging(state)
-		site.batteryPVCharge = make(map[string]bool)
-		for name := range site.batteryPVSetpoints {
-			site.batteryPVCharge[name] = true
-		}
+		pvState, pvValid = state, true
 		if sponsor.IsAuthorized() && optimizerEnabled() {
 			site.reapplySuggestions(time.Now())
 		} else {
@@ -1313,8 +1308,10 @@ func (site *Site) update(lp updater) {
 		batteryGridDischargeActive = site.batteryGridDischargeActive(feedinRate)
 	}
 	site.publish(keys.BatteryGridDischargeActive, batteryGridDischargeActive)
-	site.publish(keys.BatteryGridDischargeActive, batteryGridDischargeActive)
 
+	pvAllowed := !batteryGridChargeActive && !batteryGridDischargeActive &&
+		site.GetBatteryModeExternal() == api.BatteryUnknown && !site.dischargeControlActive(rate) && !site.evFastChargingActive()
+	site.updatePVBatteryControl(pvState, pvValid, pvAllowed)
 	site.updateBatteryMode(batteryGridChargeActive, batteryGridDischargeActive, rate)
 
 	// re-evaluate against the updated loadpoint state
@@ -1425,13 +1422,16 @@ func (site *Site) prepare() {
 	site.publish(keys.BufferStartSoc, site.bufferStartSoc)
 	site.publish(keys.BatteryMode, site.batteryMode)
 	pvChargeSupported := false
+	pvControlUnavailable := false
 	for _, dev := range site.batteryMeters {
-		if api.HasCap[api.BatteryChargePowerController](dev.Instance()) {
+		if api.HasCap[api.BatteryPVLeaseController](dev.Instance()) {
 			pvChargeSupported = true
-			break
+		} else if api.HasCap[api.BatteryControlStateReader](dev.Instance()) || api.HasCap[api.BatteryChargePowerController](dev.Instance()) {
+			pvControlUnavailable = true
 		}
 	}
 	site.publish(keys.BatteryPVChargingSupported, pvChargeSupported)
+	site.publish(keys.BatteryPVControlUnavailable, pvControlUnavailable)
 	site.publish(keys.BatteryDischargeControl, site.batteryDischargeControl)
 	site.publish(keys.BatteryGridDischarge, site.batteryGridDischarge)
 	site.publish(keys.SolarAdjusted, site.solarAdjusted)

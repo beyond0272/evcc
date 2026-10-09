@@ -42,6 +42,7 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 		LimitSoc              *plugin.Config // optional
 		BatteryMode           *plugin.Config // optional
 		ChargePower           *plugin.Config // optional dynamic charge power setter
+		BatteryControlState   *plugin.Config // optional read-only operating state
 		BatteryModes          []string       // optional, modes supported by batteryMode if it cannot report them itself
 	}
 
@@ -100,6 +101,14 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 		implement.May(m, implement.BatteryCapacity(capacity))
 		implement.May(m, implement.BatterySocLimiter(socLimiter))
 		implement.May(m, implement.BatteryPowerLimiter(powerLimiter))
+
+		if cc.BatteryControlState != nil {
+			get, err := cc.BatteryControlState.StringGetter(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("battery control state: %w", err)
+			}
+			implement.Has[api.BatteryControlStateReader](m, &batteryControlStateReader{get: get})
+		}
 
 		if cc.ChargePower != nil {
 			setPower, err := cc.ChargePower.FloatSetter(ctx, "chargePower")

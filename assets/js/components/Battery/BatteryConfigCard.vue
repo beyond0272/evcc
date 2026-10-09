@@ -72,7 +72,7 @@
 		</div>
 
 		<div
-			v-if="batteryPvChargingSupported"
+			v-if="batteryPvChargingSupported || batteryPvControlUnavailable"
 			class="d-flex gap-3 mb-4"
 			data-testid="battery-pv-start"
 		>
@@ -81,6 +81,9 @@
 				class="text-primary flex-shrink-0 mt-1"
 			></shopicon-regular-sun>
 			<div>
+				<p v-if="batteryPvControlUnavailable" class="text-warning" role="status">
+					{{ $t("battery.config.pvControlUnavailable") }}
+				</p>
 				<label for="batteryPVStartPower" class="fw-bold mb-2">
 					{{ $t("battery.config.pvStartPowerTitle") }}
 				</label>
@@ -89,7 +92,8 @@
 					tabindex="0"
 					:title="$t('battery.config.pvStartPowerHelp')"
 					:aria-label="$t('battery.config.pvStartPowerHelp')"
-				>ⓘ</span>
+					>ⓘ</span
+				>
 				<div class="input-group input-group-sm" style="max-width: 12rem">
 					<input
 						id="batteryPVStartPower"
@@ -190,6 +194,7 @@ export default defineComponent({
 		batteryDischargeControl: Boolean,
 		batteryGridDischarge: Boolean,
 		batteryPvChargingSupported: Boolean,
+		batteryPvControlUnavailable: Boolean,
 		batteryPvStartPower: { type: Number, default: 500 },
 		battery: { type: Object as PropType<Battery> },
 		experimental: Boolean,

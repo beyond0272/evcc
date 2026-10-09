@@ -1,3 +1,36 @@
+# Ownership-aware implementation update — 9 October 2026
+
+Development continues from `e04a3b5e2`; the previous local, unpushed variant was
+preserved separately instead of overwriting this branch.
+
+Read [the current implementation notes](active-pv-battery-charging.md) first.
+Actual sonnen mode observation and a generic, tested ownership state machine
+are implemented. The old native-charge takeover after two cycles is removed.
+The 500 W UI/persistent setting remains and now applies to initial export;
+100 W reserve is deducted afterwards. Power limits cap setpoints, not the
+starting export threshold. No arbitrary 80% taper was introduced.
+
+**Not yet implemented on real hardware:** a sonnen adapter proving exclusive
+ownership and enforcing expiry independently of evcc. Until that mechanism is
+verified, sonnen is observation-only, including other site-level battery mode
+commands that could otherwise bypass the guard. Do not deploy this development
+build expecting active charging. No production Pi, database or token was accessed.
+
+The state machine's fake implements fenced acquisition/renewal/release and
+expiry. Its crash/restart tests verify the controller contract, not a sonnen
+firmware capability. The remaining hardware requirement is explicit rather than
+silently replaced with an unsafe local ownership boolean. Read-only status does
+not identify who put the battery into manual mode.
+
+New interfaces: `BatteryControlStateReader`, `BatteryPVLeaseController`.
+Diagnostics: `batteryPVControl` per-device state, reason, requested power,
+actual mode/native mode and observed power; `batteryPVControlUnavailable` for
+the UI. Lease IDs are not published. No DB schema migration was added.
+
+---
+
+## Previous handover and architectural motivation (retained)
+
 # Active PV Battery Charging – Development Handover
 
 Status: Work in progress – NOT approved for production.
