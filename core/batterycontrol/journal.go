@@ -321,3 +321,9 @@ func (j *JournalSession) Close() error {
 	}
 	return nil
 }
+
+// SetDevice refreshes adapters after configuration reload; observation still
+// checks the journal identity before any command can reach the replacement.
+func (j *JournalSession) SetDevice(reader api.BatteryControlStateReader, setter api.BatteryChargePowerController, restorer api.BatteryControlRestorer) {
+	j.reader, j.setter, j.restorer = reader, setter, restorer
+}

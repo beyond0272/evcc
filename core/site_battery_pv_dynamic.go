@@ -103,6 +103,7 @@ func (site *Site) updatePVBatteryControl(state siteState, valid, allowed bool) {
 				journal = batterycontrol.NewJournalSession(session, store, reader, setter, restore)
 				site.batteryPVJournals[name] = journal
 			}
+			journal.SetDevice(reader, setter, restore)
 			stepErr = journal.Step(input)
 		} else {
 			stepErr = session.Step(reader, ctrl, input)

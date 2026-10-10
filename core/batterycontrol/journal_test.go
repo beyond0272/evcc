@@ -280,3 +280,14 @@ func TestJournalConfirmationPersistenceFailureBlocks(t *testing.T) {
 	require.Equal(t, Conflict, restarted.Phase)
 	require.Equal(t, []string{"charge"}, d.commands)
 }
+
+func TestJournalReconfiguredDeviceDoesNotReuseOldAdapter(t *testing.T) {
+	j, original, m := journalFixture()
+	require.NoError(t, j.Step(inputs()))
+	replacement := &journalDevice{store: m, state: api.BatteryControlState{Identity: "replacement", Mode: api.BatteryOperatingAuto, NativeMode: "2", Soc: 70}}
+	j.SetDevice(replacement, replacement, replacement)
+	require.NoError(t, j.Step(inputs()))
+	require.Equal(t, Conflict, j.Phase)
+	require.Empty(t, replacement.commands)
+	require.Equal(t, []string{"charge"}, original.commands)
+}
