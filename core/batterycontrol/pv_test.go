@@ -159,6 +159,28 @@ func TestPVStartThresholdIndependentOfChargeLimit(t *testing.T) {
 	}
 }
 
+func TestPVStartUsesConfiguredValueOnlyBeforeCharging(t *testing.T) {
+	for _, start := range []float64{250, 500, 750, 1500} {
+		d := newDevice()
+		s := session(d)
+		in := inputs()
+		in.StartPower = start
+		in.Grid = -start + 1
+		require.NoError(t, s.Step(d, d, in))
+		require.Empty(t, d.calls)
+		in.Grid = -start
+		require.NoError(t, s.Step(d, d, in))
+		require.Equal(t, Active, s.Phase)
+		require.Equal(t, start-100, s.Power())
+		d.state.Power = -s.Power()
+		in.StartPower = 2000 // editing the UI value does not stop a running charge
+		in.Grid = 0
+		require.NoError(t, s.Step(d, d, in))
+		require.Equal(t, Active, s.Phase)
+		require.Equal(t, start-100, s.Power())
+	}
+}
+
 func TestPVContinuesBelowStartThresholdUntilFullOrImport(t *testing.T) {
 	for _, stop := range []string{"full", "import"} {
 		t.Run(stop, func(t *testing.T) {

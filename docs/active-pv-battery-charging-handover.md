@@ -1,3 +1,14 @@
+# Cloud support and configurable start value — 10 October 2026
+
+Fixed-phase EV battery boost now uses separate PV-only start and PV+battery
+continuation gates. See [cloud support](pv-cloud-boost.md) for scope, accounting,
+tests and remaining integration. The EV minimum is calculated from phases and
+minimum current (typically 4140 W for Bluey), as confirmed by the user.
+The home-battery GUI start setting remains independent: 500 W is the default,
+not a fixed threshold. The journal and manual-control conflict UI remain pending.
+
+---
+
 # Start/stop rule clarification — 9 October 2026
 
 Implemented and tested: start at the configurable export threshold (default

@@ -821,7 +821,8 @@ func (site *Site) updateBatteryMeters() {
 		}
 
 		if bpl, ok := api.Cap[api.BatteryPowerLimiter](meter); ok && maxDischargePower >= 0 {
-			var empty bool
+			// A stale display SoC is not permission to keep discharging.
+			empty := mm[i].Soc == nil
 			if bsl, ok := api.Cap[api.BatterySocLimiter](meter); ok {
 				minSoc, _ := bsl.GetSocLimits()
 				if mm[i].Soc != nil && *mm[i].Soc <= minSoc {
@@ -1366,6 +1367,9 @@ func (site *Site) updatePower(lp updater, state siteState, totalChargePower floa
 		// below prioritySoc does not apply to the boosting loadpoint (#30541)
 		if lp.GetBatteryBoost() != boostDisabled {
 			sitePower += res.priorityAdjustment
+			// House/auxiliary loads and other EVs must remain in the boost
+			// budget; do not count them as freely reclaimable solar power.
+			sitePower += state.auxPower + flexiblePower
 		}
 
 		lp.Update(

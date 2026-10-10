@@ -1815,6 +1815,11 @@ func (lp *Loadpoint) pvEnableDecision(availableCurrent, minCurrent, sitePower fl
 
 // pvMaxCurrent calculates the maximum target current for smart mode
 func (lp *Loadpoint) pvMaxCurrent(sitePower, batteryPower float64, batteryBuffered, batteryStart bool) float64 {
+	// Fixed-phase PV boost has separate start and continuation budgets. Keep
+	// automatic phase switching on its existing path until that policy is defined.
+	if lp.usesCloudBoost() {
+		return lp.pvCloudBoostCurrent(sitePower)
+	}
 	// read only once to simplify testing
 	minCurrent := lp.effectiveMinCurrent()
 	maxCurrent := lp.effectiveMaxCurrent()
@@ -2334,8 +2339,8 @@ func (lp *Loadpoint) Update(sitePower, batteryPower float64, consumption, feedin
 	// lets the battery recharge and oscillate (#30558).
 	if boost := lp.GetBatteryBoost(); boost != boostDisabled && boost != boostHold {
 		if limit := lp.GetBatteryBoostLimit(); limit < 100 {
-			if batterySoc := lp.site.GetBatterySoc(); batterySoc < float64(limit) {
-				lp.log.DEBUG.Printf("battery boost hold: soc below limit (%.0f%% < %d%%)", batterySoc, limit)
+			if batterySoc := lp.site.GetBatterySoc(); batterySoc <= float64(limit) {
+				lp.log.DEBUG.Printf("battery boost hold: soc reached limit (%.0f%% <= %d%%)", batterySoc, limit)
 				lp.setBatteryBoost(boostHold)
 			}
 		}
@@ -2521,11 +2526,11 @@ NO_DIM:
 
 		targetCurrent := lp.pvMaxCurrent(sitePower, batteryPower, batteryBuffered, batteryStart)
 
-		if targetCurrent == 0 && lp.vehicleClimateActive() {
+		if targetCurrent == 0 && !lp.usesCloudBoost() && lp.vehicleClimateActive() {
 			targetCurrent = lp.effectiveMinCurrent()
 		}
 
-		if targetCurrent == 0 && welcomeCharge {
+		if targetCurrent == 0 && !lp.usesCloudBoost() && welcomeCharge {
 			targetCurrent = lp.effectiveMinCurrent()
 			lp.resetPVTimer()
 		}

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/evcc-io/evcc/api"
@@ -8,6 +9,24 @@ import (
 	"github.com/evcc-io/evcc/util/config"
 	"github.com/stretchr/testify/assert"
 )
+
+type unavailableSocBattery struct{ mockBatteryPowerLimiter }
+
+func (m *unavailableSocBattery) Soc() (float64, error) {
+	return 0, errors.New("battery offline")
+}
+
+func TestBatteryDischargeBudgetRequiresFreshSoc(t *testing.T) {
+	s := &Site{log: util.NewLogger("test")}
+	s.battery.Soc = 70 // cached display value from the previous successful read
+	m := &unavailableSocBattery{mockBatteryPowerLimiter{Meter: &mockMeter{}, discharge: 3300}}
+	s.batteryMeters = []config.Device[api.Meter]{config.NewStaticDevice[api.Meter](config.Named{Name: "battery"}, m)}
+	s.updateBatteryMeters()
+	assert.Equal(t, 70.0, s.GetBatterySoc(), "display keeps last known SoC")
+	if cap := s.GetBatteryMaxDischargePower(); assert.NotNil(t, cap) {
+		assert.Zero(t, *cap, "cached SoC cannot authorize battery support")
+	}
+}
 
 type mockBatteryPowerLimiter struct {
 	api.Meter
