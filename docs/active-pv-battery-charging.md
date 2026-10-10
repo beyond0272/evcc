@@ -1,142 +1,144 @@
-# Active PV Battery Charging: ownership-aware development version
+# Active PV Battery Charging: journal-based control
 
-Status: development only. Based on `e04a3b5e2`; not approved for production.
+Development status, 10 October 2026. No production Pi, database or token was accessed.
+This build can issue real sonnen charging commands. It is no longer observation-only.
+The hardware lease design remains available for other adapters, but sonnen now uses
+an action journal under the explicit assumption that evcc is the intended sole controller.
 
-## What works and what remains blocked
+## Observation and decisions
 
-The sonnen integration reads the actual mode, charging flag, power and SoC from
-one uncached `/api/v2/status` response. It does not infer ownership from a previous
-`charge` command, a local boolean, or a persisted setpoint. Mode 1 is manual;
-2 and 10 are automatic. Missing/unknown modes and non-OnGrid operation are
-ineligible. Native charging, including a negative battery power observation,
-is never taken over, regardless of how long additional export persists.
+The sonnen adapter reads mode, charging flag, power and SoC from one uncached
+`/api/v2/status` response. Mode 1 is manual; modes 2 and 10 are automatic.
+Missing or unknown mode, non-OnGrid status, invalid measurements and observations
+older than ten seconds prevent acquisition. Repeated identical timestamps do not
+refresh freshness. Timestamps are change markers: the first response cannot be
+independently dated. Configured identity is `sonnen:<host>`, not a hardware serial
+number. Changing the configured host causes a conflict; swapping hardware at the
+same address cannot be detected by this identity.
 
-**The existing sonnen write API has no verified ownership fencing and independent
-command-expiry mechanism in this implementation. Consequently this version only
-observes sonnen and does not initiate active PV charging.** The configurable
-500 W threshold, persistence and UI remain. A UI notice explains the restriction.
-The raw charge-power interface remains available for compatibility, but is not
-used as an unsafe fallback by the PV controller.
+Automatic native charging is never taken over, even if export persists. A negative
+measured battery power or native charging flag suffices to leave it alone.
+An unexplained manual mode produces a persistent conflict without writing to the battery.
 
-Other site-level mode commands are also suppressed for devices using the new
-observation/lease interfaces: tariff grid charging, discharge holds, external
-mode requests and shutdown must not bypass the ownership check. Other battery
-integrations retain their existing behavior. This deliberate restriction is
-why this development version must not replace the production installation yet.
-`batteryMode` remains evcc's requested mode, not proof of the actual device mode.
-Use `batteryPVControl` diagnostics / logs for the observed mode and decision.
+Start requires the configurable GUI **PV charging start value**, default 500 W,
+automatic idle operation, sufficient SoC headroom, valid PV measurements and an
+available positive charge-power limit. The start value is independent of that limit.
+The 100 W reserve (or larger site reserve) is deducted after the threshold check:
+500 W export initially requests at most 400 W charging. Other battery discharge
+and newly allocated loads are excluded. Household demand is already in grid power.
 
-## State machine
+During charging, measured charging power plus usable export minus reserve sets
+the new request, capped by PV and the configured limit (currently 3300 W).
+Between zero grid power and the export reserve, the last request is held.
+Falling below the start value alone does not stop charging. Any positive valid
+measured grid import, full battery/SoC limit, invalid budget, missing PV or revoked
+permission starts return to automatic control. There is no arbitrary 80% taper.
+This is cycle-based regulation, not a guarantee against short physical import transients.
 
-`core/batterycontrol.Session` separates observation from site arbitration and
-hardware access:
+## Durable action journal
 
-| State | Behavior |
+Each battery has an append-only JSONL file next to the configured database:
+`evcc.db.pv-<SHA256 of device config name>.jsonl`. Its `.lock` file holds an OS
+exclusive lock for the process lifetime. Another process using that same journal
+cannot claim it. Independent databases/hosts do not share this protection.
+In-memory databases or unavailable journal storage disable journal-based control.
+No database migration is added. The existing start-value setting remains in evcc settings.
+
+Every command follows this order:
+
+1. Append and sync intent (identity, previous automatic mode, requested watts,
+   revision, timestamp and reason), including directory sync on Linux.
+2. Send the battery command.
+3. Observe actual manual mode and check a setpoint readback when supported.
+4. Append and sync confirmation. An unchanged command is not rewritten each cycle.
+
+Release and user decisions are persisted the same way. A torn final record,
+unreadable file or failed write blocks further control. Corrupt records are not
+silently discarded. The files contain no token. History currently has no automatic
+rotation; monitor disk use. An evcc database export does not include these sidecar
+files. Copy journal files with the stopped service when preserving recovery history.
+If a journal is absent while the battery is manual, evcc reports a conflict.
+
+## Restart and fault state machine
+
+| Journal / observed state | Action |
 | --- | --- |
-| observing | Valid automatic idle battery; wait for sufficient export / permission. |
-| native-charging | Automatic battery already charging: observe, never take over. |
-| foreign-or-unknown-control | Manual/unknown mode without this process's verified lease: no writes. |
-| safe-control-unavailable | Missing safe controller or invalid observation: no acquisition. |
-| active | Device confirms this process's unexpired lease; adjust and renew. |
-| recovering | Command/release failed: retry only conditional release; never resume charging in this cycle. |
+| No active record, automatic idle | Observe; acquire only when all start conditions hold. |
+| Automatic native charging | Leave it alone. |
+| Confirmed active record after restart | Restore previous automatic mode before any new charging. |
+| Unconfirmed intent, automatic | Close the interrupted operation without a device write. |
+| Unconfirmed intent, manual/unknown | Persist conflict; ask the user. |
+| Unknown manual mode / changed identity / different readable setpoint | Persist conflict; send no further commands. |
+| Battery returns to automatic mode | End our session; this alone is not foreign control. |
+| Read failure while active | Persist recovery; retry observation and release after reconnection. |
+| Release fails | Keep recovery pending; do not resume charging. |
+| Journal unavailable | Block writes, show the problem. |
+| User disables control | Persist disabled state across restarts; no device write. |
 
-`BatteryPVLeaseController` requires atomic acquisition that rejects native
-charging/manual mode, device-enforced owner checks on every write, and independent
-expiry (90 seconds requested). Expiry must stop forced charging and restore the
-previous automatic mode even after evcc host power loss. A new process never
-adopts an old ID. A delayed release for an old ID cannot affect a new owner.
-A mode-write/setpoint-write HTTP sequence does not implement this contract.
-No real sonnen adapter claims to implement it yet. Tests use an enforcing fake;
-they do not establish that sonnen hardware has such a watchdog.
+A conflict is sticky across restart and is shown on the Battery page. The user can
+choose **Yes / unsure: disable** or **No: allow evcc recovery**. Recovery permission
+is persisted first and executed on the next cycle, after another observation.
+It restores the recorded automatic mode (2 or 10), or the configured automatic
+default when no previous mode is known. It does not immediately start charging.
+The decision endpoint requires authentication and the displayed journal revision;
+a stale dialog receives HTTP 409 and cannot approve a newer conflict.
 
-For a device meeting that contract:
+## Limits of the ownership evidence
 
-- Start at configured export threshold (default 500 W), before deducting reserve.
-- Reserve at least 100 W; larger configured site residual power is respected.
-- Exclude battery discharge from the PV budget and account for other batteries.
-- Initial 500 W export therefore requests at most 400 W charging.
-- While active, calculate measured charging power + usable export - reserve,
-  capped by PV production and the configured charge-power limit.
-- Between zero grid import and the export reserve, hold the previous setting.
-- Any valid positive measured grid import releases control immediately in that
-  control cycle; no smaller charging command is sent first. Zero grid power keeps
-  the current request. Falling below 500 W export alone does not stop charging.
-- Charge-power limits cap the request only; they never set the start threshold.
-  Budget reservations for other batteries are not measured grid import.
-- SoC limit, invalid measurements, missing PV, HEMS limits, tariff control,
-  external requests or fast EV charging end the session through fenced release.
-- No arbitrary 80% taper. The existing sonnen charge limit remains 3300 W.
+The journal proves what evcc recorded and attempted, not exclusive hardware ownership.
+The sonnen adapter has no verified setpoint readback, owner token or independent
+command watchdog. HTTP success plus manual-mode observation is recorded honestly
+as acknowledgement, not as verification of actual requested watts. Another writer
+changing a setpoint while remaining in manual mode is currently undetectable.
+An optional `ChargeSetpoint` readback is supported generically and tested, but measured
+battery power must never be substituted for it: taper, limits and response lag
+naturally change actual watts.
 
-The state reader rejects missing measurements and non-finite values. Repeated
-identical device timestamps do not refresh sample age (10-second maximum for
-control). The timestamp is used as a change marker, not parsed as a trusted UTC
-clock: an old response on the very first read cannot be dated reliably. This is
-an additional reason that observation alone must never establish ownership.
+A powered-off or disconnected evcc cannot stop a previously issued manual charge.
+Recovery runs when evcc and communications return. Battery firmware protections
+remain in effect, but are not a substitute for a verified independent watchdog.
+A read/write race against another controller is not fenced by the local journal.
 
-## Agreed next ownership revision (not implemented yet)
+## EV coordination and existing mode features
 
-The next ownership design will use a durable write-ahead action journal and
-startup reconciliation, plus a persistent GUI conflict lock requiring user
-interaction. Unknown manual operation must not be overwritten; automatic native
-charging must remain untouched. An unexpected return to automatic operation ends
-our session and is not itself evidence of a foreign manual controller. Measured
-charge power differing from a requested setpoint is not proof of a conflict.
+Manual or unobserved batteries contribute no EV discharge capacity. Their existing
+charging demand is not advertised as reclaimable PV. Active EV battery boost
+revokes PV battery charging permission so automatic battery operation can resume.
+The cloud-boost controller itself sends no manual discharge commands; see
+[pv-cloud-boost.md](pv-cloud-boost.md).
 
-This agreement supersedes the earlier requirement to solve all ownership through
-a hardware lease before proceeding. The current code still uses the lease guard;
-the journal and GUI confirmation flow have not been implemented by the threshold
-correction. A journal enables recovery after restart but cannot issue a stop while
-the evcc host is powered off. That limitation remains separate and explicit.
+Other site-level battery commands still do not bypass the ownership guard:
+legacy tariff charging, external mode requests and discharge holds are suppressed
+for guarded devices. These features have not been migrated to the journal.
+`batteryMode` is a requested site mode; use `batteryPVControl` for actual observations.
+This restriction is material when assessing a controlled test of this development build.
 
-## Verification and next hardware requirement
+## Verification and ARM64 build
 
-Verified on 9 October 2026:
-
-- `go test ./core/... ./api/... ./server/... -count=1`: passed.
-- `go test ./meter -skip '^TestTemplates$' -count=1`: passed.
-- Targeted sonnen template and HTTP mapping tests: passed.
-- All 23 frontend test files / 227 tests: passed with one worker and a workspace
-  temporary directory. The initial parallel run failed loading temporary module
-  files (`ENOENT`) in the Windows sandbox; the serial retry passed unchanged.
-- `vue-tsc --noEmit` and `vp build`: passed.
-- Linux ARM64 release cross-compilation: passed. Not executed on a Pi.
-
-
-
-Tests cover native charging across repeated cycles, manual/unknown mode on
-startup, old process ownership, 499/500 W boundary, continuation below threshold,
-balanced grid, import, power/SoC caps, faults, missing acknowledgements, recovery
-lockout, owner replacement, release, and simulated crash expiry. Template HTTP
-tests exercise actual status mapping without any real battery or token.
-
-To enable real sonnen control, obtain firmware-specific primary documentation
-for conditional ownership and automatic expiry, or design an independently
-powered local controller that enforces these semantics and excludes bypassing
-writers. A second process on the same Pi alone does not cover Pi power loss.
-Do not substitute an evcc-local owner flag for this missing hardware guarantee.
-
-Reference: manufacturer JSON API v2 status document, mirrored at
-https://doc.musicaloris.de/sonnenBatterie_JSON_API_v2_status.pdf . It documents
-status fields; it does not establish a fenced ownership/expiry protocol.
-
-Build/test commands (development machine only):
+Tests cover write ordering, confirmed and interrupted restart paths, native charging,
+conflict decisions, stale revisions, failed observations/writes/releases, identity
+changes, measured-power versus setpoint differences, torn journals, file locking,
+SoC/grid/start-value boundaries and EV budget exclusion. HTTP tests exercise sonnen
+status and exact restoration of modes 2/10, plus refusal of arbitrary/manual restore
+modes. GUI tests verify explicit decisions, persistent errors and disabled state.
+These are simulated tests, not live hardware validation.
 
 ```sh
 go test ./core/... ./api/... ./server/... -count=1
 go test ./meter -skip '^TestTemplates$' -count=1
 go test ./meter -run '^TestTemplates/sonnenbatterie' -count=1
-vp exec vue-tsc --noEmit
 vp test run --maxWorkers=1 --no-file-parallelism
 vp build
+mkdir -p build
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags=release -trimpath \
-  -ldflags="-X github.com/evcc-io/evcc/util.Version=0.316.2-pv-ownership-dev -X github.com/evcc-io/evcc/util.Commit=$(git rev-parse --short HEAD)" \
-  -o build/evcc-pv-observe-linux-arm64 .
+  -ldflags="-X github.com/evcc-io/evcc/util.Version=0.316.2-pv-journal-dev -X github.com/evcc-io/evcc/util.Commit=$(git rev-parse --short HEAD) -s -w" \
+  -o build/evcc-pv-journal-linux-arm64 .
+sha256sum build/evcc-pv-journal-linux-arm64
 ```
 
-The general meter template matrix has platform-dependent connection-error
-assertions on Windows; the targeted sonnen template check is separate.
-Building an artifact does not authorize production installation. Keep the token
-and production database on the production Pi.
+The full meter template matrix has unrelated platform-specific connection error
+assertions on Windows; the sonnen template is checked separately. Building does
+not install anything. Production deployment remains a separate controlled step.
 
 ---
 

@@ -32,6 +32,21 @@
     "title": "Autorisierungsstatus"
   },
   "battery": {
+    "control": {
+      "conflict": "Unbekannte manuelle Batteriesteuerung",
+      "disabled": "Aktive PV-Steuerung deaktiviert",
+      "unavailable": "Aktive PV-Steuerung pausiert",
+      "description": "EVCC hat die aktive PV-Ladung für Speicher {battery} gesperrt oder wartet auf eine bestätigte Rückgabe der Steuerung.",
+      "question": "Verwendet eine andere Anwendung oder Person die manuelle Steuerung deiner Batterie?",
+      "details": "Beobachtung und Aufzeichnungen anzeigen",
+      "observed": "Zuletzt beobachteter Betriebsmodus",
+      "expected": "Zuletzt protokollierte Ladeanforderung",
+      "restoreNotice": "Mit der Freigabe erlaubst du EVCC ausdrücklich, den Speicher in den vorherigen Automatikmodus zurückzusetzen. Wenn dieser unbekannt ist, wird der konfigurierte Automatikmodus verwendet. Erst danach werden die normalen Ladestartbedingungen erneut geprüft.",
+      "disable": "Ja / ich bin unsicher – deaktivieren",
+      "recover": "Nein – Wiederherstellung durch EVCC erlauben",
+      "failed": "Die Entscheidung konnte nicht gespeichert werden. Prüfe die Anmeldung und lade den aktuellen Batteriezustand neu. Die Sperre bleibt bestehen.",
+      "accepted": "Entscheidung gespeichert. Die Rückmeldung des Speichers kann bis zum nächsten Regelzyklus dauern."
+    },
     "card": {
       "charging": "lädt",
       "discharging": "entlädt",

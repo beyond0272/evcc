@@ -305,6 +305,8 @@ func (s *HTTPd) RegisterSystemHandler(site *core.Site, pub publisher, cache *uti
 		}
 	}
 
+	api.Methods("POST").Path("/batterypvcontrol").Handler(EnsureAuthHandler(auth)(batteryPVDecisionHandler(site)))
+
 	{ // /api
 		routes := map[string]route{
 			"state": {"GET", "/state", stateHandler(cache)},

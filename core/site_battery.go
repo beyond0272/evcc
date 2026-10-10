@@ -326,3 +326,23 @@ func (site *Site) evFastChargingActive() bool {
 
 	return false
 }
+
+// batteryAutomaticOperation excludes manual or unobserved devices from EV budgets.
+func batteryAutomaticOperation(meter api.Meter) bool {
+	reader, ok := api.Cap[api.BatteryControlStateReader](meter)
+	if !ok {
+		return true
+	}
+	state, err := reader.BatteryControlState()
+	age := time.Since(state.ObservedAt)
+	return err == nil && state.Mode == api.BatteryOperatingAuto && age >= 0 && age <= 10*time.Second
+}
+
+func (site *Site) evBatteryBoostActive() bool {
+	for _, lp := range site.loadpoints {
+		if lp.charging() && lp.GetBatteryBoost() != boostDisabled {
+			return true
+		}
+	}
+	return false
+}

@@ -42,6 +42,9 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 		LimitSoc              *plugin.Config // optional
 		BatteryMode           *plugin.Config // optional
 		ChargePower           *plugin.Config // optional dynamic charge power setter
+		BatteryRestoreMode    *plugin.Config
+		BatteryRestoreModes   []string
+		BatteryRestoreDefault string
 		BatteryControlState   *plugin.Config // optional read-only operating state
 		BatteryModes          []string       // optional, modes supported by batteryMode if it cannot report them itself
 	}
@@ -110,6 +113,13 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 			implement.Has[api.BatteryControlStateReader](m, &batteryControlStateReader{get: get})
 		}
 
+		if cc.BatteryRestoreMode != nil {
+			set, err := cc.BatteryRestoreMode.StringSetter(ctx, "nativeMode")
+			if err != nil {
+				return nil, fmt.Errorf("battery restore mode: %w", err)
+			}
+			implement.Has[api.BatteryControlRestorer](m, batteryModeRestorer{set: set, modes: cc.BatteryRestoreModes, fallback: cc.BatteryRestoreDefault})
+		}
 		if cc.ChargePower != nil {
 			setPower, err := cc.ChargePower.FloatSetter(ctx, "chargePower")
 			if err != nil {
@@ -199,4 +209,22 @@ type Meter struct {
 // CurrentPower implements the api.Meter interface
 func (m *Meter) CurrentPower() (float64, error) {
 	return m.currentPowerG()
+}
+
+// Only explicitly configured automatic modes may be restored; a GUI decision
+// cannot inject arbitrary text into the device's HTTP command.
+type batteryModeRestorer struct {
+	set      func(string) error
+	modes    []string
+	fallback string
+}
+
+func (r batteryModeRestorer) RestoreBatteryMode(mode string) error {
+	if mode == "" {
+		mode = r.fallback
+	}
+	if mode == "" || !slices.Contains(r.modes, mode) {
+		return fmt.Errorf("unsupported automatic mode")
+	}
+	return r.set(mode)
 }

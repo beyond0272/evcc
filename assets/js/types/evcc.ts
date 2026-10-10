@@ -227,7 +227,7 @@ export interface State {
   residualPower?: number;
   /** Start threshold for active home battery PV charging in W. */
   batteryPVStartPower?: number;
-  /** At least one battery supports device-enforced ownership and expiry for PV charging. */
+  /** At least one battery supports journaled or leased PV control. */
   batteryPVChargingSupported?: boolean;
   batteryPVControlUnavailable?: boolean;
   batteryPVControl?: Record<
@@ -239,6 +239,10 @@ export interface State {
       actualMode: string;
       nativeMode: string;
       actualPower: number;
+      revision?: string;
+      updated?: string;
+      expectedPower?: number;
+      previousMode?: string;
     }
   >;
 

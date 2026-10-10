@@ -1,3 +1,27 @@
+# Journal and user recovery implemented: 10 October 2026
+
+Current behavior is documented in [active-pv-battery-charging.md](active-pv-battery-charging.md).
+The journal, startup reconciliation, explicit authenticated GUI decisions and
+previous automatic-mode restoration are now implemented. The earlier observation-only
+restriction below is historical. Real sonnen writes are enabled when journal
+storage and actual mode observation are available and start conditions hold.
+
+A journal is evidence of our commands, not a hardware ownership token. Same-mode
+external writes and host power loss remain limitations; no sonnen watchdog or
+setpoint readback has been invented. Configuration identity is host-based.
+The previous lease implementation remains for genuinely fenced adapters.
+
+Manual or unobserved charging is excluded from EV budgets, and active vehicle
+boost ends PV battery charging. Legacy site-level tariff/hold/external commands
+remain suppressed for guarded batteries pending their own ownership integration.
+The 500 W GUI default, 100 W reserve and computed three-phase EV minimum remain.
+
+No production machine or token was accessed. The remaining step is a separately
+agreed hardware test, including real mode transitions, charge response and reconnect
+behavior. Existing dated notes below preserve the design history, not current status.
+
+---
+
 # Cloud support and configurable start value — 10 October 2026
 
 Fixed-phase EV battery boost now uses separate PV-only start and PV+battery

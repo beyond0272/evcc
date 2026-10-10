@@ -1,6 +1,7 @@
 package meter
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,41 @@ func TestSonnenActualControlState(t *testing.T) {
 			require.Empty(t, state.LeaseID)
 			require.False(t, api.HasCap[api.BatteryPVLeaseController](m))
 			require.Equal(t, 1, reads)
+		})
+	}
+}
+
+func TestSonnenRestorePreviousAutomaticMode(t *testing.T) {
+	for _, fallback := range []string{"self-consumption", "time-of-use"} {
+		t.Run(fallback, func(t *testing.T) {
+			var modes []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodPut, r.Method)
+				require.Equal(t, "/api/v2/configurations", r.URL.Path)
+				require.Equal(t, "test-only", r.Header.Get("Auth-Token"))
+				var body map[string]string
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				modes = append(modes, body["EM_OperatingMode"])
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{}`)
+			}))
+			defer server.Close()
+			m, err := NewFromConfig(t.Context(), "template", map[string]any{
+				"template": "sonnenbatterie", "usage": "battery", "host": strings.TrimPrefix(server.URL, "http://"), "token": "test-only", "defaultmode": fallback,
+			})
+			require.NoError(t, err)
+			restore, ok := api.Cap[api.BatteryControlRestorer](m)
+			require.True(t, ok)
+			require.NoError(t, restore.RestoreBatteryMode("10"))
+			require.NoError(t, restore.RestoreBatteryMode("2"))
+			require.NoError(t, restore.RestoreBatteryMode(""))
+			require.Error(t, restore.RestoreBatteryMode("1"))
+			require.Error(t, restore.RestoreBatteryMode("invalid"))
+			defaultMode := "2"
+			if fallback == "time-of-use" {
+				defaultMode = "10"
+			}
+			require.Equal(t, []string{"10", "2", defaultMode}, modes)
 		})
 	}
 }

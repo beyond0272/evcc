@@ -71,11 +71,22 @@ render: |
           elif $mode == "2" or $mode == "10" then "automatic"
           else "unknown" end),
         NativeMode: $mode,
+        Identity: "sonnen:{{ .host }}",
         Power: .Pac_total_W,
         Soc: .USOC,
         NativeCharging: .BatteryCharging,
         Sample: .Timestamp
       } | @json
+  batteryrestoremodes: ["2", "10"]
+  batteryrestoredefault: {{ if eq .defaultmode "time-of-use" }}"10"{{ else }}"2"{{ end }}
+  batteryrestoremode:
+    source: http
+    uri: http://{{ .host }}/api/v2/configurations
+    method: PUT
+    headers:
+    - content-type: application/json
+    - Auth-Token: {{ .token }}
+    body: '{"EM_OperatingMode":"${nativeMode}"}'
   batterymode:
     source: switch
     switch:

@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -145,4 +146,60 @@ func TestDynamicPVAllocatesMeasuredBudgetAndReleases(t *testing.T) {
 	require.Zero(t, a.target)
 	require.Empty(t, a.writes)
 	require.Empty(t, b.writes)
+}
+
+func TestManualBatteryCannotSupplyEVBudget(t *testing.T) {
+	for _, mode := range []api.BatteryOperatingMode{api.BatteryOperatingAuto, api.BatteryOperatingManual, api.BatteryOperatingUnknown} {
+		t.Run(string(mode), func(t *testing.T) {
+			b := &observedPVBattery{state: api.BatteryControlState{Mode: mode, Power: -1200, Soc: 70}}
+			s := guardedSite(b)
+			s.updateBatteryMeters()
+			if mode == api.BatteryOperatingAuto {
+				require.Zero(t, s.state().batteryFixedChargePower)
+			} else {
+				require.Equal(t, 1200.0, s.state().batteryFixedChargePower)
+			}
+			require.Equal(t, mode == api.BatteryOperatingAuto, batteryAutomaticOperation(b))
+		})
+	}
+}
+
+type journalSiteBattery struct{ observedPVBattery }
+
+func (b *journalSiteBattery) GetPowerLimits() (float64, float64) { return 3300, 3300 }
+func (b *journalSiteBattery) SetBatteryChargePower(power float64) error {
+	b.state.Mode, b.state.NativeMode = api.BatteryOperatingManual, "1"
+	b.state.Power = -power
+	b.writes = append(b.writes, api.BatteryCharge)
+	return nil
+}
+func (b *journalSiteBattery) RestoreBatteryMode(mode string) error {
+	b.state.Mode, b.state.NativeMode = api.BatteryOperatingAuto, mode
+	b.state.Power = 0
+	b.writes = append(b.writes, api.BatteryNormal)
+	return nil
+}
+func TestSiteJournalConflictDecisionAndShutdown(t *testing.T) {
+	b := &journalSiteBattery{observedPVBattery{state: api.BatteryControlState{Identity: "device", Mode: api.BatteryOperatingAuto, NativeMode: "10", Soc: 70}}}
+	s := guardedSite(&b.observedPVBattery)
+	s.batteryMeters = []config.Device[api.Meter]{config.NewStaticDevice[api.Meter](config.Named{Name: "battery"}, b)}
+	session := new(batterycontrol.Session)
+	store, err := batterycontrol.OpenFileJournal(filepath.Join(t.TempDir(), "journal.jsonl"))
+	require.NoError(t, err)
+	journal := batterycontrol.NewJournalSession(session, store, b, b, b)
+	s.batteryPVSessions = map[string]*batterycontrol.Session{"battery": session}
+	s.batteryPVJournals = map[string]*batterycontrol.JournalSession{"battery": journal}
+	state := siteState{gridPower: -1000, pvPower: 2000}
+	s.updatePVBatteryControl(state, true, true)
+	require.Equal(t, batterycontrol.Active, session.Phase)
+	require.Equal(t, []api.BatteryMode{api.BatteryCharge}, b.writes)
+	b.state.Identity = "other-device"
+	s.updatePVBatteryControl(state, true, true)
+	require.Equal(t, batterycontrol.Conflict, session.Phase)
+	require.Error(t, s.ResolveBatteryPVControl("battery", "recover", "stale"))
+	require.NoError(t, s.ResolveBatteryPVControl("battery", "disable", journal.Record.Revision))
+	require.Equal(t, batterycontrol.Disabled, session.Phase)
+	s.stopPVBatteryControl()
+	require.Equal(t, []api.BatteryMode{api.BatteryCharge}, b.writes)
+	require.Error(t, s.ResolveBatteryPVControl("battery", "recover", journal.Record.Revision))
 }

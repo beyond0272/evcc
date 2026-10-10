@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/util"
@@ -135,5 +136,31 @@ func TestBatteryMaxDischargePowerWithMinSoc(t *testing.T) {
 	site.updateBatteryMeters()
 	if res := site.GetBatteryMaxDischargePower(); assert.NotNil(t, res) {
 		assert.Equal(t, 0.0, *res)
+	}
+}
+
+type modeBudgetBattery struct {
+	mockBatteryPowerLimiter
+	mode api.BatteryOperatingMode
+}
+
+func (m *modeBudgetBattery) BatteryControlState() (api.BatteryControlState, error) {
+	return api.BatteryControlState{Mode: m.mode, ObservedAt: time.Now()}, nil
+}
+func TestBatteryDischargeBudgetRequiresAutomaticMode(t *testing.T) {
+	m := &modeBudgetBattery{mockBatteryPowerLimiter: mockBatteryPowerLimiter{Meter: &mockMeter{}, discharge: 3300}}
+	s := &Site{log: util.NewLogger("test")}
+	s.batteryMeters = []config.Device[api.Meter]{config.NewStaticDevice[api.Meter](config.Named{Name: "battery"}, m)}
+	for _, mode := range []api.BatteryOperatingMode{api.BatteryOperatingManual, api.BatteryOperatingUnknown, api.BatteryOperatingAuto} {
+		m.mode = mode
+		s.updateBatteryMeters()
+		cap := s.GetBatteryMaxDischargePower()
+		if assert.NotNil(t, cap) {
+			expected := 0.0
+			if mode == api.BatteryOperatingAuto {
+				expected = 3300
+			}
+			assert.Equal(t, expected, *cap)
+		}
 	}
 }

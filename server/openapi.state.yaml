@@ -108,7 +108,7 @@ components:
           description: Start threshold for active home battery PV charging in W.
           type: number
         batteryPVChargingSupported:
-          description: At least one battery supports device-enforced ownership and expiry for PV charging.
+          description: At least one battery supports journaled or leased PV control.
           type: boolean
         batteryPVControlUnavailable:
           type: boolean
@@ -129,6 +129,14 @@ components:
                 type: string
               actualPower:
                 type: number
+              revision:
+                type: string
+              updated:
+                type: string
+              expectedPower:
+                type: number
+              previousMode:
+                type: string
             required:
               - state
               - reason

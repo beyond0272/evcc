@@ -28,6 +28,8 @@ func (r *batteryControlStateReader) BatteryControlState() (api.BatteryControlSta
 		return state, err
 	}
 	var raw struct {
+		Identity       string
+		ChargeSetpoint *float64
 		Mode           api.BatteryOperatingMode
 		NativeMode     string
 		Power, Soc     *float64
@@ -41,12 +43,16 @@ func (r *batteryControlStateReader) BatteryControlState() (api.BatteryControlSta
 		math.IsNaN(*raw.Power) || math.IsInf(*raw.Power, 0) || math.IsNaN(*raw.Soc) || math.IsInf(*raw.Soc, 0) || *raw.Soc < 0 || *raw.Soc > 100 {
 		return state, fmt.Errorf("battery control state incomplete or invalid")
 	}
+	if raw.ChargeSetpoint != nil && (math.IsNaN(*raw.ChargeSetpoint) || math.IsInf(*raw.ChargeSetpoint, 0) || *raw.ChargeSetpoint < 0) {
+		return state, fmt.Errorf("invalid charge setpoint")
+	}
 	if raw.Mode != api.BatteryOperatingAuto && raw.Mode != api.BatteryOperatingManual {
 		raw.Mode = api.BatteryOperatingUnknown
 	}
 	if raw.Sample != r.sample {
 		r.sample, r.observed = raw.Sample, time.Now()
 	}
+	state.Identity, state.ChargeSetpoint = raw.Identity, raw.ChargeSetpoint
 	state.Mode, state.NativeMode = raw.Mode, raw.NativeMode
 	state.Power, state.Soc = *raw.Power, *raw.Soc
 	state.NativeCharging, state.ObservedAt = *raw.NativeCharging, r.observed

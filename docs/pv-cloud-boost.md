@@ -71,6 +71,8 @@ limits/SoC, immediate pause and EV current cap.
 This budget controller does not send new manual sonnen discharge commands. It
 relies on the battery supplying demand through its native regulation and on an
 accurate allowed discharge limit. Simulated tests do not verify the physical
-battery response. The previously agreed action journal and GUI confirmation for
-unknown manual control are still separate pending work; the current PV battery
-charging adapter remains guarded. No token or production database was accessed.
+battery response. The action journal and GUI confirmation are implemented separately; see
+[PV battery control](active-pv-battery-charging.md). Manual or unobserved batteries
+contribute no discharge capacity and their charging demand is not reclaimable PV.
+Active EV boost returns owned PV charging to automatic mode. No token or production
+database was accessed.

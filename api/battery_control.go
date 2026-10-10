@@ -14,6 +14,8 @@ const (
 // BatteryControlState is a fresh device observation. Power is positive for discharge.
 // LeaseID must come from an enforcing device/controller, never from local command history.
 type BatteryControlState struct {
+	Identity       string   // configured device identity, never a secret
+	ChargeSetpoint *float64 // optional readback, not measured charging power
 	Mode           BatteryOperatingMode
 	NativeMode     string
 	Power          float64
@@ -22,6 +24,12 @@ type BatteryControlState struct {
 	ObservedAt     time.Time
 	LeaseID        string
 	LeaseUntil     time.Time
+}
+
+// BatteryControlRestorer restores an observed native automatic mode.
+// An empty mode explicitly requests the configured automatic default.
+type BatteryControlRestorer interface {
+	RestoreBatteryMode(nativeMode string) error
 }
 
 // BatteryControlStateReader reports actual operating mode and battery measurements.

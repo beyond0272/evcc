@@ -10,6 +10,8 @@
 						:battery-mode="state.batteryMode"
 					/>
 
+					<BatteryControlJournal :controls="state.batteryPVControl" />
+
 					<BatteryHistoryCard
 						class="mb-4 box-pull-out"
 						:batteries="chartBatteries"
@@ -67,6 +69,7 @@ import Card from "../components/Helper/Card.vue";
 import SmartCostLimit from "../components/Tariff/SmartCostLimit.vue";
 import SmartFeedInPriority from "../components/Tariff/SmartFeedInPriority.vue";
 import BatteryStatusCards from "../components/Battery/BatteryStatusCards.vue";
+import BatteryControlJournal from "../components/Battery/BatteryControlJournal.vue";
 import BatteryConfigCard from "../components/Battery/BatteryConfigCard.vue";
 import BatteryHistoryCard from "../components/Battery/BatteryHistoryCard.vue";
 import {
@@ -87,6 +90,7 @@ export default defineComponent({
 		SmartFeedInPriority,
 		BatteryStatusCards,
 		BatteryConfigCard,
+		BatteryControlJournal,
 		BatteryHistoryCard,
 	},
 	head() {

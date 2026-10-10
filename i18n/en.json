@@ -32,6 +32,21 @@
     "title": "Authorization Status"
   },
   "battery": {
+    "control": {
+      "conflict": "Unknown manual battery control",
+      "disabled": "Active PV control disabled",
+      "unavailable": "Active PV control paused",
+      "description": "EVCC has blocked active PV charging for battery {battery} or is waiting for confirmation that control has been returned.",
+      "question": "Is another application or person using manual control of your battery?",
+      "details": "Show observations and journal",
+      "observed": "Last observed operating mode",
+      "expected": "Last recorded charge request",
+      "restoreNotice": "Approving explicitly allows EVCC to restore the previous automatic mode. If unknown, the configured automatic mode is used. Normal charging start conditions are checked again afterwards.",
+      "disable": "Yes / unsure – disable control",
+      "recover": "No – allow EVCC to restore automatic mode",
+      "failed": "The decision could not be saved. Check authentication and reload the current battery state. The lock remains in place.",
+      "accepted": "Decision saved. Confirmation may take until the next control cycle."
+    },
     "card": {
       "charging": "charging",
       "discharging": "discharging",
