@@ -14,6 +14,8 @@ import (
 const (
 	LeaseDuration = 90 * time.Second
 	MaxSampleAge  = 10 * time.Second
+	// Ignore the observed idle offset only when the device also denies charging.
+	NativeChargeIdleTolerance = 5.0
 )
 
 // Phase is the controller's current state.
@@ -42,14 +44,15 @@ type Input struct {
 // Session only owns a device-verified lease created during this process lifetime.
 // It is deliberately not restored from a persisted boolean or previous setpoint.
 type Session struct {
-	Phase              Phase
-	Reason             string
-	ObservedMode       api.BatteryOperatingMode
-	ObservedNativeMode string
-	ObservedPower      float64
-	leaseID            string
-	power              float64
-	now                func() time.Time
+	Phase                  Phase
+	Reason                 string
+	ObservedMode           api.BatteryOperatingMode
+	ObservedNativeMode     string
+	ObservedPower          float64
+	ObservedNativeCharging bool
+	leaseID                string
+	power                  float64
+	now                    func() time.Time
 }
 
 // Power returns the last confirmed requested power while active.
@@ -58,6 +61,10 @@ func (s *Session) Power() float64 {
 		return s.power
 	}
 	return 0
+}
+
+func nativeCharging(state api.BatteryControlState) bool {
+	return state.NativeCharging || state.Power < -NativeChargeIdleTolerance
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
@@ -113,6 +120,7 @@ func (s *Session) Step(reader api.BatteryControlStateReader, ctrl api.BatteryPVL
 		return stopErr
 	}
 	s.ObservedMode, s.ObservedNativeMode, s.ObservedPower = state.Mode, state.NativeMode, state.Power
+	s.ObservedNativeCharging = state.NativeCharging
 	owned := s.leaseID != "" && state.LeaseID == s.leaseID && state.LeaseUntil.After(now) && state.Mode == api.BatteryOperatingManual
 	if s.leaseID != "" && !owned {
 		// Release is conditional on the old ID, so it cannot modify a new owner's mode.
@@ -127,7 +135,7 @@ func (s *Session) Step(reader api.BatteryControlStateReader, ctrl api.BatteryPVL
 			s.transition(Foreign, "manual or unknown mode without this process's lease")
 			return nil
 		}
-		if state.Power < 0 || state.NativeCharging {
+		if nativeCharging(state) {
 			s.transition(Native, "battery is charging autonomously")
 			return nil
 		}
@@ -152,7 +160,10 @@ func (s *Session) Step(reader api.BatteryControlStateReader, ctrl api.BatteryPVL
 		// release now, rather than continuing forced charging at a lower setpoint.
 		return s.Stop(ctrl, "grid import detected")
 	}
-	charge := max(0, -state.Power)
+	charge := 0.0
+	if owned {
+		charge = max(0, -state.Power)
+	}
 	budgetGrid := in.Grid + in.UnavailablePower
 	export := -budgetGrid - max(0, state.Power)
 	if !owned && export < in.StartPower {

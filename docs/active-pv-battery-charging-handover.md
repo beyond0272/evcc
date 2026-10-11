@@ -1,3 +1,13 @@
+# Idle-power correction: 11 October 2026
+
+Live status confirmed automatic mode 2, OnGrid, both charge/discharge flags false,
+SoC 0% and -3 W. The previous negative-power test falsely blocked PV acquisition.
+A 5 W idle tolerance now applies only when the native charging flag is false.
+True flags and charging above this tolerance still prevent acquisition. Initial
+requests use export minus reserve without adding the idle offset. Tests cover
+500/499 W export, zero SoC, night, the tolerance boundary and conflicting flags.
+The actual flag is now included in control logs. No production files were changed.
+
 # Journal and user recovery implemented: 10 October 2026
 
 Current behavior is documented in [active-pv-battery-charging.md](active-pv-battery-charging.md).

@@ -115,7 +115,7 @@ func (site *Site) updatePVBatteryControl(state siteState, valid, allowed bool) {
 		if before != session.Phase || reason != session.Reason {
 			site.log.INFO.Printf("active PV battery charging: battery=%s state=%s reason=%s", name, session.Phase, session.Reason)
 		}
-		site.log.DEBUG.Printf("active PV battery charging: battery=%s grid=%.0fW pv=%.0fW target=%.0fW state=%s actualMode=%s nativeMode=%s actualPower=%.0fW", name, grid, pv, session.Power(), session.Phase, session.ObservedMode, session.ObservedNativeMode, session.ObservedPower)
+		site.log.DEBUG.Printf("active PV battery charging: battery=%s grid=%.0fW pv=%.0fW target=%.0fW state=%s actualMode=%s nativeMode=%s actualPower=%.0fW nativeCharging=%t", name, grid, pv, session.Power(), session.Phase, session.ObservedMode, session.ObservedNativeMode, session.ObservedPower, session.ObservedNativeCharging)
 	}
 	site.publish("batteryPVControl", site.pvBatteryStatus())
 }

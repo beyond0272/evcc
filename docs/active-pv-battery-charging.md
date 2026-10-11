@@ -16,8 +16,12 @@ independently dated. Configured identity is `sonnen:<host>`, not a hardware seri
 number. Changing the configured host causes a conflict; swapping hardware at the
 same address cannot be detected by this identity.
 
-Automatic native charging is never taken over, even if export persists. A negative
-measured battery power or native charging flag suffices to leave it alone.
+Automatic native charging is never taken over, even if export persists. The native charging flag always prevents takeover. With the flag false, only
+charging above 5 W is treated as native charging. This conservative idle tolerance
+addresses the observed sonnen status `BatteryCharging=false`, `Pac_total_W=-3`
+on 11 October 2026; it is not a manufacturer accuracy specification. Idle watts
+are not added to the initial charging budget. The configurable start value is
+independent of this tolerance. Logs include the observed `nativeCharging` flag.
 An unexplained manual mode produces a persistent conflict without writing to the battery.
 
 Start requires the configurable GUI **PV charging start value**, default 500 W,

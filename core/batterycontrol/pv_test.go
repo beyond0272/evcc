@@ -38,7 +38,7 @@ func (d *fakeDevice) BatteryControlState() (api.BatteryControlState, error) {
 }
 func (d *fakeDevice) AcquireBatteryPVControl(id string, power float64, ttl time.Duration) error {
 	d.calls = append(d.calls, "acquire")
-	if d.state.Mode != api.BatteryOperatingAuto || d.state.Power < 0 || d.state.NativeCharging || d.state.LeaseID != "" {
+	if d.state.Mode != api.BatteryOperatingAuto || d.state.Power < -5 || d.state.NativeCharging || d.state.LeaseID != "" {
 		return errors.New("compare failed")
 	}
 	d.previous = d.state.NativeMode
@@ -89,7 +89,7 @@ func TestPVNeverClaimsNativeOrUnknown(t *testing.T) {
 		want     Phase
 	}{
 		{"native charging", api.BatteryOperatingAuto, -900, false, "", Native},
-		{"native tiny charging", api.BatteryOperatingAuto, -3, false, "", Native},
+		{"native tiny charging with flag", api.BatteryOperatingAuto, -3, true, "", Native},
 		{"native charging flag", api.BatteryOperatingAuto, 0, true, "", Native},
 		{"manual startup", api.BatteryOperatingManual, 0, false, "", Foreign},
 		{"previous process lease", api.BatteryOperatingManual, -500, false, "old-process", Foreign},
@@ -336,4 +336,13 @@ func TestPVReadOnlyDeviceCannotBeForced(t *testing.T) {
 	require.NoError(t, s.Step(d, nil, inputs()))
 	require.Equal(t, Blocked, s.Phase)
 	require.Empty(t, d.calls)
+}
+
+func TestPVIdleOffsetStart(t *testing.T) {
+	d := newDevice()
+	d.state.Power, d.state.Soc = -3, 0
+	s := session(d)
+	require.NoError(t, s.Step(d, d, inputs()))
+	require.Equal(t, Active, s.Phase)
+	require.Equal(t, []float64{400}, d.targets)
 }

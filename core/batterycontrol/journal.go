@@ -90,6 +90,7 @@ func (j *JournalSession) observe() (api.BatteryControlState, error) {
 		return s, fmt.Errorf("invalid or stale battery observation")
 	}
 	j.ObservedMode, j.ObservedNativeMode, j.ObservedPower = s.Mode, s.NativeMode, s.Power
+	j.ObservedNativeCharging = s.NativeCharging
 	return s, nil
 }
 
@@ -254,7 +255,7 @@ func (j *JournalSession) Step(in Input) error {
 		if s.Mode != api.BatteryOperatingAuto {
 			return j.conflict("manual or unknown operation without own journal")
 		}
-		if s.NativeCharging || s.Power < 0 {
+		if nativeCharging(s) {
 			j.transition(Native, "battery is charging autonomously")
 			return nil
 		}
@@ -273,7 +274,11 @@ func (j *JournalSession) Step(in Input) error {
 		j.transition(Observing, "below configured start threshold")
 		return nil
 	}
-	target := math.Floor(min(in.MaxPower, in.PV, max(0, max(0, -s.Power)+export-in.Reserve)))
+	charge := 0.0
+	if owned {
+		charge = max(0, -s.Power)
+	}
+	target := math.Floor(min(in.MaxPower, in.PV, max(0, charge+export-in.Reserve)))
 	if owned && grid <= 0 && grid >= -in.Reserve {
 		target = min(j.Record.Power, in.MaxPower, in.PV)
 	}

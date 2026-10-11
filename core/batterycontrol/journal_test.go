@@ -291,3 +291,38 @@ func TestJournalReconfiguredDeviceDoesNotReuseOldAdapter(t *testing.T) {
 	require.Empty(t, replacement.commands)
 	require.Equal(t, []string{"charge"}, original.commands)
 }
+
+func TestJournalIdleOffsetAndNativeChargeProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		power, grid, pv float64
+		flag            bool
+		phase           Phase
+		target          float64
+	}{
+		{"observed idle offset starts", -3, -500, 731, false, Active, 400},
+		{"idle boundary", -5, -500, 731, false, Active, 400},
+		{"below configured start", -3, -499, 731, false, Observing, 0},
+		{"night", -3, 250, 0, false, Observing, 0},
+		{"native flag overrides offset", -3, -1000, 1500, true, Native, 0},
+		{"native flag at zero watts", 0, -1000, 1500, true, Native, 0},
+		{"above idle tolerance", -6, -1000, 1500, false, Native, 0},
+		{"charging despite false flag", -900, -1000, 2000, false, Native, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j, d, _ := journalFixture()
+			d.state.Power, d.state.Soc, d.state.NativeCharging = tc.power, 0, tc.flag
+			in := inputs()
+			in.Grid, in.PV = tc.grid, tc.pv
+			require.NoError(t, j.Step(in))
+			require.Equal(t, tc.phase, j.Phase)
+			require.Equal(t, tc.target, j.Power())
+			require.Equal(t, tc.flag, j.ObservedNativeCharging)
+			if tc.target == 0 {
+				require.Empty(t, d.commands)
+			} else {
+				require.Equal(t, []string{"charge"}, d.commands)
+			}
+		})
+	}
+}
