@@ -1,6 +1,6 @@
 # Active PV Battery Charging: journal-based control
 
-Development status, 10 October 2026. No production Pi, database or token was accessed.
+Development status, 11 October 2026. No production Pi, database or token was accessed.
 This build can issue real sonnen charging commands. It is no longer observation-only.
 The hardware lease design remains available for other adapters, but sonnen now uses
 an action journal under the explicit assumption that evcc is the intended sole controller.
@@ -53,11 +53,16 @@ Every command follows this order:
 1. Append and sync intent (identity, previous automatic mode, requested watts,
    revision, timestamp and reason), including directory sync on Linux.
 2. Send the battery command.
-3. Observe actual manual mode and check a setpoint readback when supported.
+3. Enter `confirming` and observe in later control cycles (90-second confirmation
+   window). Accept only a valid sample newer than the command; check a setpoint
+   readback when supported. Old automatic mode or a previous setpoint is initially
+   pending, not evidence of foreign control. Do not resend charge while pending.
 4. Append and sync confirmation. An unchanged command is not rewritten each cycle.
 
 Release and user decisions are persisted the same way. A torn final record,
-unreadable file or failed write blocks further control. Corrupt records are not
+unreadable file blocks automatic control. A write failure blocks new charging,
+but a previously validated durable own command still authorizes best-effort
+rollback even if the journal can no longer be written. Corrupt records are not
 silently discarded. The files contain no token. History currently has no automatic
 rotation; monitor disk use. An evcc database export does not include these sidecar
 files. Copy journal files with the stopped service when preserving recovery history.
@@ -70,13 +75,15 @@ If a journal is absent while the battery is manual, evcc reports a conflict.
 | No active record, automatic idle | Observe; acquire only when all start conditions hold. |
 | Automatic native charging | Leave it alone. |
 | Confirmed active record after restart | Restore previous automatic mode before any new charging. |
-| Unconfirmed intent, automatic | Close the interrupted operation without a device write. |
-| Unconfirmed intent, manual/unknown | Persist conflict; ask the user. |
+| Own intent, confirmation pending | Wait for later samples; abort immediately on unsafe site conditions. |
+| Own intent, confirmation deadline exceeded / command error | Restore previous automatic mode; no conflict solely for a delayed reply. |
+| Own intent after restart | Restore previous automatic mode even if an old automatic sample is still visible. |
 | Unknown manual mode / changed identity / different readable setpoint | Persist conflict; send no further commands. |
 | Battery returns to automatic mode | End our session; this alone is not foreign control. |
-| Read failure while active | Persist recovery; retry observation and release after reconnection. |
+| Read failure while active or confirming | Persist recovery; retry observation and release after reconnection. |
 | Release fails | Keep recovery pending; do not resume charging. |
-| Journal unavailable | Block writes, show the problem. |
+| Journal unavailable on startup | Block writes, show the problem. |
+| Journal write fails after own durable intent | Block new charging and attempt rollback; keep recovery pending. |
 | User disables control | Persist disabled state across restarts; no device write. |
 
 A conflict is sticky across restart and is shown on the Battery page. The user can
@@ -86,6 +93,34 @@ It restores the recorded automatic mode (2 or 10), or the configured automatic
 default when no previous mode is known. It does not immediately start charging.
 The decision endpoint requires authentication and the displayed journal revision;
 a stale dialog receives HTTP 409 and cannot approve a newer conflict.
+
+
+A release is sent once, then checked on later observations. The first still-manual
+sample is not an error. If restoration remains unconfirmed, retry at intervals of
+at least 30 seconds. Recovery never expires into permission to charge. The normal
+30-second site cycle determines observation latency; network import is checked
+while charge confirmation is pending and takes precedence over its deadline.
+A graceful shutdown waits up to 15 seconds for later restoration confirmation
+(subject to device I/O and the process shutdown deadline). Unconfirmed restoration
+is logged explicitly and retained for the next start. Process death or network
+failure cannot guarantee immediate physical restoration.
+
+The first confirmed manual mode is not proof that measured watts already match.
+Dynamic updates likewise wait for later confirmation before sending another
+charge request. Outstanding commands reserve their requested budget, even though
+the active controller target is zero during confirmation/recovery.
+
+Conflicts from old builds remain locked; the update does not silently discard
+previous user decisions or overwrite unknown manual control. The October 11
+hardware incident was returned to automatic mode explicitly by the user. Its old
+conflict can be cleared through the existing authenticated recovery decision,
+which first reconciles automatic operation and does not charge in that cycle.
+
+Logs distinguish `controllerTarget` from `lastChargeRequest`. A zero controller
+target does not mean a zero-watt command was sent. `lastObservedMode`,
+`lastObservedPower`, `observationValid` and `observedAt` disclose observation age.
+Even conflict/disabled sessions refresh read-only observations; failed reads mark
+last-known values invalid in the GUI.
 
 ## Limits of the ownership evidence
 
@@ -135,9 +170,9 @@ vp test run --maxWorkers=1 --no-file-parallelism
 vp build
 mkdir -p build
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags=release -trimpath \
-  -ldflags="-X github.com/evcc-io/evcc/util.Version=0.316.2-pv-journal-dev -X github.com/evcc-io/evcc/util.Commit=$(git rev-parse --short HEAD) -s -w" \
-  -o build/evcc-pv-journal-linux-arm64 .
-sha256sum build/evcc-pv-journal-linux-arm64
+  -ldflags="-X github.com/evcc-io/evcc/util.Version=0.316.2-pv-confirmation-dev -X github.com/evcc-io/evcc/util.Commit=$(git rev-parse --short HEAD) -s -w" \
+  -o build/evcc-pv-confirmation-linux-arm64 .
+sha256sum build/evcc-pv-confirmation-linux-arm64
 ```
 
 The full meter template matrix has unrelated platform-specific connection error

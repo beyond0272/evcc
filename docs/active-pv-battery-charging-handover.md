@@ -1,3 +1,18 @@
+# Delayed confirmation and rollback: 11 October 2026
+
+The live test exposed a critical failure: at 09:44:11 CEST an own 418 W command
+was followed by an old automatic status. The old code persisted a conflict,
+stopped updating observations and skipped shutdown restoration. The battery
+continued manual charging until the user explicitly restored mode 2; the user
+confirmed that charging behavior then normalized.
+
+Own commands now remain pending for later confirmation. Missing confirmation,
+command failures, unsafe site conditions and restarts initiate restoration of the
+previous automatic mode. Fresh observations continue even in locked states.
+See [current behavior](active-pv-battery-charging.md) for deadlines, storage-error
+handling and remaining hardware limitations. Historical conflicts remain locked
+and require explicit resolution. No production files were modified.
+
 # Idle-power correction: 11 October 2026
 
 Live status confirmed automatic mode 2, OnGrid, both charge/discharge flags false,

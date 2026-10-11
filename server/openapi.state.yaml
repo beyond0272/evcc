@@ -137,6 +137,12 @@ components:
                 type: number
               previousMode:
                 type: string
+              observedAt:
+                type: string
+              observationValid:
+                type: boolean
+              journalStage:
+                type: string
             required:
               - state
               - reason

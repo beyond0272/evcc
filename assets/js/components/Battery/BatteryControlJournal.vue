@@ -9,11 +9,20 @@
 		<h2 class="h5">
 			{{
 				$t(
-					`battery.control.${control.state === "disabled" ? "disabled" : control.state === "control-conflict" ? "conflict" : "unavailable"}`
+					`battery.control.${control.state === "confirming" ? "confirmingTitle" : control.state === "disabled" ? "disabled" : control.state === "control-conflict" ? "conflict" : "unavailable"}`
 				)
 			}}
 		</h2>
-		<p>{{ $t("battery.control.description", { battery: name }) }}</p>
+		<p>
+			{{
+				$t(
+					control.state === "confirming"
+						? "battery.control.confirming"
+						: "battery.control.description",
+					{ battery: name }
+				)
+			}}
+		</p>
 		<p v-if="control.state === 'control-conflict' || control.state === 'disabled'">
 			{{ $t("battery.control.question") }}
 		</p>
@@ -25,6 +34,12 @@
 			</p>
 			<p class="mb-1">
 				{{ $t("battery.control.expected") }}: {{ control.expectedPower ?? "—" }} W
+			</p>
+			<p class="mb-1">
+				{{ $t("battery.control.observedAt") }}: {{ control.observedAt || "—" }}
+			</p>
+			<p v-if="control.observationValid === false" class="text-danger">
+				{{ $t("battery.control.stale") }}
 			</p>
 			<p class="mb-1">{{ control.updated }}</p>
 			<p class="mb-0">{{ control.reason }}</p>
@@ -74,6 +89,8 @@ type Control = {
 	revision?: string;
 	updated?: string;
 	expectedPower?: number;
+	observedAt?: string;
+	observationValid?: boolean;
 };
 
 export default defineComponent({
@@ -86,6 +103,7 @@ export default defineComponent({
 			return Object.fromEntries(
 				Object.entries(this.controls ?? {}).filter(([, c]) =>
 					[
+						"confirming",
 						"control-conflict",
 						"disabled",
 						"recovering",

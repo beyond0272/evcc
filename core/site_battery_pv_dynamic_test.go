@@ -186,10 +186,13 @@ func TestSiteJournalConflictDecisionAndShutdown(t *testing.T) {
 	session := new(batterycontrol.Session)
 	store, err := batterycontrol.OpenFileJournal(filepath.Join(t.TempDir(), "journal.jsonl"))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
 	journal := batterycontrol.NewJournalSession(session, store, b, b, b)
 	s.batteryPVSessions = map[string]*batterycontrol.Session{"battery": session}
 	s.batteryPVJournals = map[string]*batterycontrol.JournalSession{"battery": journal}
 	state := siteState{gridPower: -1000, pvPower: 2000}
+	s.updatePVBatteryControl(state, true, true)
+	require.Equal(t, batterycontrol.Confirming, session.Phase)
 	s.updatePVBatteryControl(state, true, true)
 	require.Equal(t, batterycontrol.Active, session.Phase)
 	require.Equal(t, []api.BatteryMode{api.BatteryCharge}, b.writes)

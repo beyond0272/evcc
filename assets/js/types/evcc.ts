@@ -243,6 +243,9 @@ export interface State {
       updated?: string;
       expectedPower?: number;
       previousMode?: string;
+      observedAt?: string;
+      observationValid?: boolean;
+      journalStage?: string;
     }
   >;
 

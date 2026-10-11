@@ -1,14 +1,14 @@
 package batterycontrol
 
 import (
+	"context"
 	"errors"
+	"github.com/evcc-io/evcc/api"
+	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/evcc-io/evcc/api"
-	"github.com/stretchr/testify/require"
 )
 
 type memoryJournal struct {
@@ -32,10 +32,11 @@ func (m *memoryJournal) Save(r Record) error {
 }
 
 type journalDevice struct {
-	state                            api.BatteryControlState
-	store                            *memoryJournal
-	commands                         []string
-	failRead, failWrite, failRestore bool
+	state                                                               api.BatteryControlState
+	store                                                               *memoryJournal
+	commands                                                            []string
+	now                                                                 time.Time
+	failRead, failWrite, failRestore, delayCharge, delayRestore, frozen bool
 }
 
 func (d *journalDevice) BatteryControlState() (api.BatteryControlState, error) {
@@ -43,7 +44,9 @@ func (d *journalDevice) BatteryControlState() (api.BatteryControlState, error) {
 		return d.state, errors.New("offline")
 	}
 	s := d.state
-	s.ObservedAt = time.Now()
+	if !d.frozen {
+		s.ObservedAt = d.now
+	}
 	return s, nil
 }
 func (d *journalDevice) SetBatteryChargePower(p float64) error {
@@ -51,17 +54,29 @@ func (d *journalDevice) SetBatteryChargePower(p float64) error {
 		panic("command before durable intent")
 	}
 	d.commands = append(d.commands, "charge")
-	d.state.Mode = api.BatteryOperatingManual
-	d.state.NativeMode = "1"
-	d.state.ChargeSetpoint = new(p)
+	if !d.delayCharge {
+		d.manual(p)
+	}
 	if d.failWrite {
 		return errors.New("lost acknowledgement")
 	}
 	return nil
 }
+func (d *journalDevice) manual(p float64) {
+	d.state.Mode = api.BatteryOperatingManual
+	d.state.NativeMode = "1"
+	d.state.ChargeSetpoint = new(p)
+}
+func (d *journalDevice) automatic(mode string) {
+	d.state.Mode = api.BatteryOperatingAuto
+	d.state.NativeMode = mode
+	d.state.ChargeSetpoint = nil
+	d.state.Power = 0
+}
 func (d *journalDevice) RestoreBatteryMode(mode string) error {
-	if d.store.record.Stage != "releasing" {
-		panic("restore before durable intent")
+	// A persisted intent remains sufficient evidence when a later journal write fails.
+	if d.store.record.Stage != "releasing" && d.store.record.Stage != "intent" && d.store.record.Stage != "active" {
+		panic("restore without own durable operation")
 	}
 	d.commands = append(d.commands, "restore:"+mode)
 	if d.failRestore {
@@ -70,157 +85,282 @@ func (d *journalDevice) RestoreBatteryMode(mode string) error {
 	if mode == "" {
 		mode = "2"
 	}
-	d.state.Mode = api.BatteryOperatingAuto
-	d.state.NativeMode = mode
-	d.state.ChargeSetpoint = nil
-	d.state.Power = 0
+	if !d.delayRestore {
+		d.automatic(mode)
+	}
 	return nil
 }
 func journalFixture() (*JournalSession, *journalDevice, *memoryJournal) {
 	m := new(memoryJournal)
-	d := &journalDevice{store: m, state: api.BatteryControlState{Identity: "device", Mode: api.BatteryOperatingAuto, NativeMode: "10", Soc: 70}}
-	j := NewJournalSession(new(Session), m, d, d, d)
+	d := &journalDevice{store: m, now: time.Now(), state: api.BatteryControlState{Identity: "device", Mode: api.BatteryOperatingAuto, NativeMode: "10", Soc: 70}}
+	j := NewJournalSession(&Session{now: func() time.Time { return d.now }}, m, d, d, d)
 	return j, d, m
 }
-
-func TestJournalIntentConfirmationAndRestartRecovery(t *testing.T) {
-	j, d, m := journalFixture()
-	require.NoError(t, j.Step(inputs()))
-	require.Equal(t, "intent", m.writes[0].Stage)
-	require.Equal(t, "active", m.writes[1].Stage)
-	require.Equal(t, 400.0, j.Power())
-	restarted := NewJournalSession(new(Session), m, d, d, d)
-	require.NoError(t, restarted.Step(inputs()))
-	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
-	require.Equal(t, "idle", m.record.Stage)
-	require.Zero(t, restarted.Power())
+func tick(j *JournalSession, d *journalDevice, in Input) error {
+	d.now = d.now.Add(30 * time.Second)
+	return j.Step(in)
 }
-
-func TestJournalInterruptedCommandRequiresDecision(t *testing.T) {
-	for _, manual := range []bool{false, true} {
-		j, d, m := journalFixture()
-		m.record = Record{Schema: 1, Revision: "saved", Identity: "device", Stage: "intent", PreviousMode: "10", Power: 400}
-		if manual {
-			d.state.Mode = api.BatteryOperatingManual
-		}
-		j = NewJournalSession(new(Session), m, d, d, d)
-		require.NoError(t, j.Step(inputs()))
-		require.Empty(t, d.commands)
-		if manual {
-			require.Equal(t, Conflict, j.Phase)
-		} else {
-			require.Equal(t, Observing, j.Phase)
-		}
-	}
-}
-
-func TestJournalUnknownManualDisableAndExplicitRecovery(t *testing.T) {
-	j, d, m := journalFixture()
-	d.state.Mode = api.BatteryOperatingManual
-	d.state.NativeMode = "1"
+func startJournal(t *testing.T, j *JournalSession, d *journalDevice) {
+	t.Helper()
 	require.NoError(t, j.Step(inputs()))
-	require.Equal(t, Conflict, j.Phase)
-	require.Error(t, j.Resolve("recover", "old-dialog"))
-	require.NoError(t, j.Resolve("disable", j.Record.Revision))
-	j = NewJournalSession(new(Session), m, d, d, d)
-	require.NoError(t, j.Step(inputs()))
-	require.Equal(t, Disabled, j.Phase)
-	require.Empty(t, d.commands)
-	require.NoError(t, j.Resolve("recover", j.Record.Revision))
-	require.Empty(t, d.commands, "decision alone never commands device")
-	require.NoError(t, j.Step(inputs()))
-	require.Equal(t, []string{"restore:"}, d.commands)
-	require.Equal(t, Observing, j.Phase, "no charge immediately after recovery")
-}
-
-func TestJournalNativeAndAutomaticReturnAreNotConflicts(t *testing.T) {
-	j, d, _ := journalFixture()
-	d.state.Power = -900
-	d.state.NativeCharging = true
-	for range 5 {
-		require.NoError(t, j.Step(inputs()))
-	}
-	require.Equal(t, Native, j.Phase)
-	require.Empty(t, d.commands)
-	d.state.Power = 0
-	d.state.NativeCharging = false
-	require.NoError(t, j.Step(inputs()))
-	d.state.Mode = api.BatteryOperatingAuto
-	d.state.NativeMode = "2"
-	require.NoError(t, j.Step(inputs()))
-	require.Equal(t, Observing, j.Phase)
-	require.Equal(t, []string{"charge"}, d.commands)
-}
-
-func TestJournalSetpointConflictNotMeasuredPower(t *testing.T) {
-	j, d, _ := journalFixture()
-	require.NoError(t, j.Step(inputs()))
-	d.state.Power = -250 // physical response need not equal the 400W command
-	in := inputs()
-	in.Grid = 0
-	require.NoError(t, j.Step(in))
+	require.Equal(t, Confirming, j.Phase)
+	require.NoError(t, tick(j, d, inputs()))
 	require.Equal(t, Active, j.Phase)
-	d.state.ChargeSetpoint = new(900.0)
-	require.NoError(t, j.Step(in))
-	require.Equal(t, Conflict, j.Phase)
-	require.Equal(t, []string{"charge"}, d.commands)
-	require.NoError(t, j.Release("shutdown"))
-	require.Equal(t, []string{"charge"}, d.commands)
+}
+func restartedJournal(j *JournalSession, d *journalDevice, m *memoryJournal) *JournalSession {
+	return NewJournalSession(&Session{now: j.now}, m, d, d, d)
 }
 
-func TestJournalWriteReadAndRestoreFailures(t *testing.T) {
+func TestJournalDelayedChargeAndReturn(t *testing.T) {
+	j, d, m := journalFixture()
+	d.delayCharge = true
+	require.NoError(t, j.Step(inputs()))
+	require.Equal(t, "intent", m.record.Stage)
+	require.Equal(t, "10", m.record.PreviousMode)
+	require.Equal(t, Confirming, j.Phase)
+	require.NoError(t, tick(j, d, inputs())) // still automatic
+	require.Equal(t, Confirming, j.Phase)
+	require.Equal(t, []string{"charge"}, d.commands)
+	d.manual(400)
+	d.state.Power = -3
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, Active, j.Phase)
+	require.Equal(t, 400.0, j.Power())
+	d.delayRestore = true
+	in := inputs()
+	in.Grid = 9000
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Recovering, j.Phase)
+	require.Equal(t, "releasing", m.record.Stage)
+	// An immediate repeat neither treats manual status as a conflict nor resends.
+	require.NoError(t, j.Step(in))
+	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+	d.automatic("10")
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Observing, j.Phase)
+	require.Equal(t, "idle", m.record.Stage)
+}
+func TestJournalPendingSafetyAndTimeout(t *testing.T) {
+	for _, why := range []string{"timeout", "grid", "permission", "invalid", "full", "limit"} {
+		t.Run(why, func(t *testing.T) {
+			j, d, _ := journalFixture()
+			d.delayCharge = true
+			require.NoError(t, j.Step(inputs()))
+			in := inputs()
+			switch why {
+			case "timeout":
+				d.now = d.now.Add(ConfirmationWindow)
+			case "grid":
+				in.Grid = 1
+			case "permission":
+				in.Allowed = false
+			case "invalid":
+				in.Valid = false
+			case "full":
+				d.state.Soc = 100
+			case "limit":
+				in.MaxPower = 300
+			}
+			require.NoError(t, j.Step(in))
+			require.Equal(t, Recovering, j.Phase)
+			require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+			require.NoError(t, tick(j, d, in))
+			require.Equal(t, "idle", j.Record.Stage)
+		})
+	}
+}
+func TestJournalRestartRestoresEveryOwnStage(t *testing.T) {
+	for _, stage := range []string{"intent", "active", "releasing"} {
+		t.Run(stage, func(t *testing.T) {
+			j, d, m := journalFixture()
+			require.NoError(t, j.Step(inputs()))
+			if stage != "intent" {
+				require.NoError(t, tick(j, d, inputs()))
+			}
+			if stage == "releasing" {
+				d.delayRestore = true
+				require.NoError(t, j.Release("stop"))
+			}
+			j = restartedJournal(j, d, m)
+			d.now = d.now.Add(31 * time.Second)
+			require.NoError(t, j.Step(inputs()))
+			require.Equal(t, Recovering, j.Phase)
+			d.automatic("10")
+			require.NoError(t, tick(j, d, inputs()))
+			require.Equal(t, "idle", m.record.Stage)
+			require.Equal(t, "charge", d.commands[0])
+			for _, c := range d.commands[1:] {
+				require.Equal(t, "restore:10", c)
+			}
+		})
+	}
+}
+func TestJournalWriteFailureReadFailureAndRetry(t *testing.T) {
+	for _, failure := range []string{"write", "read", "restore"} {
+		t.Run(failure, func(t *testing.T) {
+			j, d, m := journalFixture()
+			if failure == "write" {
+				d.failWrite = true
+				require.Error(t, j.Step(inputs()))
+			} else {
+				startJournal(t, j, d)
+				if failure == "read" {
+					d.failRead = true
+					require.Error(t, tick(j, d, inputs()))
+				} else {
+					d.failRestore = true
+					require.Error(t, j.Release("test"))
+				}
+			}
+			require.Equal(t, "releasing", m.record.Stage)
+			require.NotEqual(t, Conflict, j.Phase)
+			d.failRead, d.failWrite, d.failRestore = false, false, false
+			for range 3 {
+				require.NoError(t, tick(j, d, inputs()))
+				if m.record.Stage == "idle" {
+					break
+				}
+			}
+			require.Equal(t, "idle", m.record.Stage)
+		})
+	}
+}
+func TestJournalStorageFailureStillRestoresOwnCommand(t *testing.T) {
 	j, d, m := journalFixture()
 	m.err = errors.New("disk full")
 	require.Error(t, j.Step(inputs()))
 	require.Empty(t, d.commands)
-	j, d, _ = journalFixture()
-	d.failWrite = true
-	require.Error(t, j.Step(inputs()))
-	require.Equal(t, Conflict, j.Phase)
-	require.NoError(t, j.Step(inputs()))
-	require.Len(t, d.commands, 1)
 	j, d, m = journalFixture()
 	require.NoError(t, j.Step(inputs()))
-	d.failRead = true
-	require.Error(t, j.Step(inputs()))
-	require.Len(t, d.commands, 1)
-	d.failRead = false
-	d.failRestore = true
-	in := inputs()
-	in.Grid = 1
-	require.Error(t, j.Step(in))
-	require.Equal(t, Recovering, j.Phase)
-	require.Equal(t, "releasing", m.record.Stage)
-	d.failRestore = false
-	restarted := NewJournalSession(new(Session), m, d, d, d)
-	require.NoError(t, restarted.Step(inputs()))
-	require.Equal(t, []string{"charge", "restore:10", "restore:10"}, d.commands)
+	m.failStage = "active"
+	require.Error(t, tick(j, d, inputs()))
+	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+	require.Equal(t, "intent", m.record.Stage, "last durable evidence survives failed confirmation")
+	m.failStage = ""
+	j = restartedJournal(j, d, m)
+	require.NoError(t, tick(j, d, inputs()))
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, "idle", m.record.Stage)
 }
-
-func TestJournalConfiguredStartContinuationSocAndIdentity(t *testing.T) {
-	j, d, _ := journalFixture()
-	in := inputs()
-	in.StartPower = 750
-	require.NoError(t, j.Step(in))
-	require.Empty(t, d.commands)
-	in.Grid = -750
-	require.NoError(t, j.Step(in))
-	require.Equal(t, 650.0, j.Power())
-	d.state.Power = -650
-	in.Grid = 0
-	require.NoError(t, j.Step(in))
-	require.Equal(t, 650.0, j.Power())
-	d.state.Soc = 100
-	require.NoError(t, j.Step(in))
-	require.Equal(t, "idle", j.Record.Stage)
-	j, d, _ = journalFixture()
-	require.NoError(t, j.Step(inputs()))
-	d.state.Identity = "other-device"
+func TestJournalUnknownManualAndRealConflictStayLockedButObserve(t *testing.T) {
+	j, d, m := journalFixture()
+	d.manual(418)
 	require.NoError(t, j.Step(inputs()))
 	require.Equal(t, Conflict, j.Phase)
-	require.Len(t, d.commands, 1)
+	d.state.Power = -419
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, -419.0, j.ObservedPower)
+	require.True(t, j.ObservationValid)
+	require.Empty(t, d.commands)
+	d.failRead = true
+	require.Error(t, tick(j, d, inputs()))
+	require.False(t, j.ObservationValid)
+	d.failRead = false
+	require.Error(t, j.Resolve("recover", "stale"))
+	require.NoError(t, j.Resolve("disable", m.record.Revision))
+	j = restartedJournal(j, d, m)
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, Disabled, j.Phase)
+	require.NoError(t, j.Resolve("recover", m.record.Revision))
+	require.Empty(t, d.commands)
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, Recovering, j.Phase)
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, Observing, j.Phase)
+	require.Equal(t, []string{"restore:"}, d.commands)
 }
-
+func TestJournalForeignSetpointAndIdentityAreNotRollbackPermission(t *testing.T) {
+	for _, change := range []string{"identity", "setpoint"} {
+		t.Run(change, func(t *testing.T) {
+			j, d, _ := journalFixture()
+			startJournal(t, j, d)
+			if change == "identity" {
+				d.state.Identity = "other"
+			} else {
+				d.state.ChargeSetpoint = new(999.0)
+			}
+			require.NoError(t, tick(j, d, inputs()))
+			require.Equal(t, Conflict, j.Phase)
+			require.NoError(t, j.Release("shutdown"))
+			require.Equal(t, []string{"charge"}, d.commands)
+		})
+	}
+}
+func TestJournalObservedAutomaticReturnAndNativeCharging(t *testing.T) {
+	j, d, _ := journalFixture()
+	d.state.NativeCharging = true
+	d.state.Power = -900
+	for range 4 {
+		require.NoError(t, tick(j, d, inputs()))
+	}
+	require.Equal(t, Native, j.Phase)
+	require.Empty(t, d.commands)
+	d.state.NativeCharging = false
+	d.state.Power = 0
+	startJournal(t, j, d)
+	d.automatic("2")
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, Observing, j.Phase)
+	require.Equal(t, []string{"charge"}, d.commands)
+}
+func TestJournalDynamicBudgetAndMeasuredPower(t *testing.T) {
+	j, d, _ := journalFixture()
+	startJournal(t, j, d)
+	d.state.Power = -420
+	in := inputs()
+	in.Grid = -1500
+	in.PV = 3000
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, 1820.0, j.Record.Power)
+	require.Equal(t, Confirming, j.Phase)
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Active, j.Phase)
+	// Actual watts can lag or taper without implying a foreign setpoint.
+	d.state.Power = -1500
+	in.Grid = 0
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Active, j.Phase)
+	require.Equal(t, 1820.0, j.Power())
+	in.Grid = 9000
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Recovering, j.Phase)
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, "idle", j.Record.Stage)
+}
+func TestJournalIdleOffsetAndStartSetting(t *testing.T) {
+	for _, tc := range []struct {
+		power, export, start float64
+		flag                 bool
+		want                 Phase
+	}{
+		{-3, 500, 500, false, Confirming}, {-3, 499, 500, false, Observing}, {-5, 500, 500, false, Confirming},
+		{-6, 500, 500, false, Native}, {-3, 500, 500, true, Native}, {-900, 500, 500, false, Native},
+		{-3, 749, 750, false, Observing}, {-3, 750, 750, false, Confirming},
+	} {
+		j, d, _ := journalFixture()
+		d.state.Power, d.state.Soc, d.state.NativeCharging = tc.power, 0, tc.flag
+		in := inputs()
+		in.Grid, in.StartPower = -tc.export, tc.start
+		require.NoError(t, j.Step(in))
+		require.Equal(t, tc.want, j.Phase)
+		if tc.want == Confirming {
+			require.Equal(t, tc.export-100, j.Record.Power)
+		} else {
+			require.Empty(t, d.commands)
+		}
+	}
+}
+func TestJournalFreshConfirmationRequired(t *testing.T) {
+	j, d, _ := journalFixture()
+	require.NoError(t, j.Step(inputs()))
+	d.frozen = true
+	d.state.ObservedAt = d.now
+	require.NoError(t, j.Step(inputs()))
+	require.Equal(t, Confirming, j.Phase)
+	d.frozen = false
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, Active, j.Phase)
+}
 func TestFileJournalRoundTripAndTornTail(t *testing.T) {
 	f := FileJournal{Path: filepath.Join(t.TempDir(), "journal.jsonl")}
 	r, err := f.Load()
@@ -254,75 +394,88 @@ func TestFileJournalExclusiveLock(t *testing.T) {
 	require.NoError(t, second.Close())
 }
 
-func TestJournalReleaseReadFailurePersistsRecovery(t *testing.T) {
+func TestJournalCorruptLoadCannotAuthorizeRollback(t *testing.T) {
 	j, d, m := journalFixture()
-	require.NoError(t, j.Step(inputs()))
-	d.failRead = true
-	require.Error(t, j.Release("shutdown"))
-	require.Equal(t, "releasing", m.record.Stage)
-	d.failRead = false
-	require.NoError(t, j.Step(inputs()))
-	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
-	require.Equal(t, "idle", m.record.Stage)
-}
-
-func TestJournalConfirmationPersistenceFailureBlocks(t *testing.T) {
-	j, d, m := journalFixture()
-	m.failStage = "active"
+	startJournal(t, j, d)
+	m.err = errors.New("torn final record")
+	j = restartedJournal(j, d, m)
 	require.Error(t, j.Step(inputs()))
 	require.Equal(t, Blocked, j.Phase)
-	require.Equal(t, "intent", m.record.Stage)
-	require.Error(t, j.Step(inputs()))
-	require.Equal(t, []string{"charge"}, d.commands)
-	m.failStage = ""
-	restarted := NewJournalSession(new(Session), m, d, d, d)
-	require.NoError(t, restarted.Step(inputs()))
-	require.Equal(t, Conflict, restarted.Phase)
+	require.Error(t, j.Release("shutdown"))
 	require.Equal(t, []string{"charge"}, d.commands)
 }
-
-func TestJournalReconfiguredDeviceDoesNotReuseOldAdapter(t *testing.T) {
-	j, original, m := journalFixture()
+func TestJournalShutdownFromUnconfirmedCommand(t *testing.T) {
+	j, d, m := journalFixture()
 	require.NoError(t, j.Step(inputs()))
-	replacement := &journalDevice{store: m, state: api.BatteryControlState{Identity: "replacement", Mode: api.BatteryOperatingAuto, NativeMode: "2", Soc: 70}}
-	j.SetDevice(replacement, replacement, replacement)
-	require.NoError(t, j.Step(inputs()))
-	require.Equal(t, Conflict, j.Phase)
-	require.Empty(t, replacement.commands)
-	require.Equal(t, []string{"charge"}, original.commands)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, j.Shutdown(ctx))
+	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+	require.Equal(t, "releasing", m.record.Stage, "unconfirmed restoration remains durable")
+	j = restartedJournal(j, d, m)
+	require.NoError(t, tick(j, d, inputs()))
+	require.Equal(t, "idle", m.record.Stage)
 }
-
-func TestJournalIdleOffsetAndNativeChargeProtection(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		power, grid, pv float64
-		flag            bool
-		phase           Phase
-		target          float64
-	}{
-		{"observed idle offset starts", -3, -500, 731, false, Active, 400},
-		{"idle boundary", -5, -500, 731, false, Active, 400},
-		{"below configured start", -3, -499, 731, false, Observing, 0},
-		{"night", -3, 250, 0, false, Observing, 0},
-		{"native flag overrides offset", -3, -1000, 1500, true, Native, 0},
-		{"native flag at zero watts", 0, -1000, 1500, true, Native, 0},
-		{"above idle tolerance", -6, -1000, 1500, false, Native, 0},
-		{"charging despite false flag", -900, -1000, 2000, false, Native, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			j, d, _ := journalFixture()
-			d.state.Power, d.state.Soc, d.state.NativeCharging = tc.power, 0, tc.flag
-			in := inputs()
-			in.Grid, in.PV = tc.grid, tc.pv
-			require.NoError(t, j.Step(in))
-			require.Equal(t, tc.phase, j.Phase)
-			require.Equal(t, tc.target, j.Power())
-			require.Equal(t, tc.flag, j.ObservedNativeCharging)
-			if tc.target == 0 {
-				require.Empty(t, d.commands)
-			} else {
-				require.Equal(t, []string{"charge"}, d.commands)
-			}
-		})
+func TestJournalReleaseRetriesWithSpacing(t *testing.T) {
+	j, d, _ := journalFixture()
+	startJournal(t, j, d)
+	d.delayRestore = true
+	require.NoError(t, j.Release("grid import"))
+	for range 4 {
+		d.now = d.now.Add(time.Second)
+		require.NoError(t, j.Step(inputs()))
 	}
+	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+	d.now = d.now.Add(RestoreRetryInterval)
+	require.NoError(t, j.Step(inputs()))
+	require.Equal(t, []string{"charge", "restore:10", "restore:10"}, d.commands)
+	require.Equal(t, Recovering, j.Phase)
+}
+func TestJournalDelayedSetpointUpdateAndObservationFailure(t *testing.T) {
+	j, d, _ := journalFixture()
+	startJournal(t, j, d)
+	d.delayCharge = true
+	d.state.Power = -400
+	in := inputs()
+	in.Grid = -1500
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, 1800.0, j.Record.Power)
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Confirming, j.Phase, "old setpoint is not foreign control during own update")
+	d.failRead = true
+	require.Error(t, tick(j, d, in))
+	require.Equal(t, "releasing", j.Record.Stage)
+	d.failRead = false
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, "restore:10", d.commands[len(d.commands)-1])
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, "idle", j.Record.Stage)
+}
+
+type advancingJournalReader struct{ *journalDevice }
+
+func (r advancingJournalReader) BatteryControlState() (api.BatteryControlState, error) {
+	r.now = r.now.Add(time.Second)
+	return r.journalDevice.BatteryControlState()
+}
+func TestJournalShutdownWaitsForLaterObservation(t *testing.T) {
+	j, d, m := journalFixture()
+	require.NoError(t, j.Step(inputs()))
+	j.reader = advancingJournalReader{d}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	require.NoError(t, j.Shutdown(ctx))
+	require.Equal(t, "idle", m.record.Stage)
+	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+}
+func TestJournalUnconfirmedCommandReservesBudget(t *testing.T) {
+	j, d, _ := journalFixture()
+	d.delayCharge = true
+	require.NoError(t, j.Step(inputs()))
+	require.Zero(t, j.Power(), "controller is not active yet")
+	require.Equal(t, 400.0, j.ReservedPower(), "possibly applied command must not be allocated twice")
+	require.NoError(t, j.Release("abort"))
+	require.Equal(t, 400.0, j.ReservedPower())
+	require.NoError(t, tick(j, d, inputs()))
+	require.Zero(t, j.ReservedPower())
 }

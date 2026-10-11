@@ -63,3 +63,29 @@ describe("battery control journal decisions", () => {
     wrapper.unmount();
   });
 });
+
+it("shows pending confirmation without offering a conflict decision", () => {
+  const wrapper = card("confirming");
+  expect(wrapper.text()).toContain("battery.control.confirming");
+  expect(wrapper.find('[data-testid="pv-recover"]').exists()).toBe(false);
+  expect(wrapper.find('[data-testid="pv-disable"]').exists()).toBe(false);
+  wrapper.unmount();
+});
+it("marks invalid observations instead of presenting old values as current", async () => {
+  const wrapper = card();
+  await wrapper.setProps({
+    controls: {
+      "db:3": {
+        state: "control-conflict",
+        reason: "offline",
+        actualMode: "manual",
+        nativeMode: "1",
+        observationValid: false,
+        observedAt: "2026-10-11T07:44:11Z",
+      },
+    },
+  });
+  expect(wrapper.text()).toContain("battery.control.stale");
+  expect(wrapper.text()).toContain("2026-10-11T07:44:11Z");
+  wrapper.unmount();
+});

@@ -45,7 +45,11 @@
       "disable": "Yes / unsure – disable control",
       "recover": "No – allow EVCC to restore automatic mode",
       "failed": "The decision could not be saved. Check authentication and reload the current battery state. The lock remains in place.",
-      "accepted": "Decision saved. Confirmation may take until the next control cycle."
+      "accepted": "Decision saved. Confirmation may take until the next control cycle.",
+      "confirming": "Control change requested for battery {battery}. Waiting for confirmation.",
+      "observedAt": "Last valid observation time",
+      "stale": "No current valid response. Displayed values do not confirm the present device state.",
+      "confirmingTitle": "Waiting for control confirmation"
     },
     "card": {
       "charging": "charging",

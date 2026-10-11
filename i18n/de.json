@@ -45,7 +45,11 @@
       "disable": "Ja / ich bin unsicher – deaktivieren",
       "recover": "Nein – Wiederherstellung durch EVCC erlauben",
       "failed": "Die Entscheidung konnte nicht gespeichert werden. Prüfe die Anmeldung und lade den aktuellen Batteriezustand neu. Die Sperre bleibt bestehen.",
-      "accepted": "Entscheidung gespeichert. Die Rückmeldung des Speichers kann bis zum nächsten Regelzyklus dauern."
+      "accepted": "Entscheidung gespeichert. Die Rückmeldung des Speichers kann bis zum nächsten Regelzyklus dauern.",
+      "confirming": "Umschaltung für Speicher {battery} angefordert. Bestätigung ausstehend.",
+      "observedAt": "Zeitpunkt der letzten gültigen Beobachtung",
+      "stale": "Keine aktuelle gültige Rückmeldung. Die angezeigten Werte sind keine Bestätigung des aktuellen Zustands.",
+      "confirmingTitle": "Bestätigung der Umschaltung ausstehend"
     },
     "card": {
       "charging": "lädt",

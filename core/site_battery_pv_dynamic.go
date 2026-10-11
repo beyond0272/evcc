@@ -1,10 +1,12 @@
 package core
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"math"
 	"path/filepath"
+	"time"
 
 	"github.com/evcc-io/evcc/db"
 
@@ -111,11 +113,19 @@ func (site *Site) updatePVBatteryControl(state siteState, valid, allowed bool) {
 		if err := stepErr; err != nil {
 			site.log.ERROR.Printf("active PV battery charging: %s: %v", name, err)
 		}
-		allocated += max(0, session.Power()-charges[name])
+		reserved := session.Power()
+		if journal := site.batteryPVJournals[name]; journal != nil {
+			reserved = journal.ReservedPower()
+		}
+		allocated += max(0, reserved-charges[name])
 		if before != session.Phase || reason != session.Reason {
 			site.log.INFO.Printf("active PV battery charging: battery=%s state=%s reason=%s", name, session.Phase, session.Reason)
 		}
-		site.log.DEBUG.Printf("active PV battery charging: battery=%s grid=%.0fW pv=%.0fW target=%.0fW state=%s actualMode=%s nativeMode=%s actualPower=%.0fW nativeCharging=%t", name, grid, pv, session.Power(), session.Phase, session.ObservedMode, session.ObservedNativeMode, session.ObservedPower, session.ObservedNativeCharging)
+		if journal := site.batteryPVJournals[name]; journal != nil {
+			site.log.DEBUG.Printf("active PV battery charging: battery=%s grid=%.0fW pv=%.0fW controllerTarget=%.0fW lastChargeRequest=%.0fW state=%s lastObservedMode=%s lastObservedNativeMode=%s lastObservedPower=%.0fW nativeCharging=%t observationValid=%t observedAt=%s journalStage=%s", name, grid, pv, session.Power(), journal.Record.Power, session.Phase, session.ObservedMode, session.ObservedNativeMode, session.ObservedPower, session.ObservedNativeCharging, journal.ObservationValid, journal.ObservationAt.Format(time.RFC3339Nano), journal.Record.Stage)
+		} else {
+			site.log.DEBUG.Printf("active PV battery charging: battery=%s grid=%.0fW pv=%.0fW target=%.0fW state=%s actualMode=%s nativeMode=%s actualPower=%.0fW", name, grid, pv, session.Power(), session.Phase, session.ObservedMode, session.ObservedNativeMode, session.ObservedPower)
+		}
 	}
 	site.publish("batteryPVControl", site.pvBatteryStatus())
 }
@@ -124,10 +134,13 @@ func (site *Site) stopPVBatteryControl() {
 	site.batteryPVMu.Lock()
 	defer site.batteryPVMu.Unlock()
 	site.batteryPVStopped = true
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	for _, dev := range site.batteryMeters {
 		name := dev.Config().Name
 		if journal := site.batteryPVJournals[name]; journal != nil {
-			if err := journal.Release("evcc shutdown"); err != nil {
+			err := journal.Shutdown(ctx)
+			if err != nil {
 				site.log.ERROR.Printf("PV battery journal shutdown %s: %v", name, err)
 			}
 			if err := journal.Close(); err != nil {
@@ -154,6 +167,9 @@ func (site *Site) pvBatteryStatus() map[string]map[string]any {
 			entry["updated"] = j.Record.Updated
 			entry["expectedPower"] = j.Record.Power
 			entry["previousMode"] = j.Record.PreviousMode
+			entry["observationValid"] = j.ObservationValid
+			entry["observedAt"] = j.ObservationAt
+			entry["journalStage"] = j.Record.Stage
 		}
 		status[name] = entry
 	}
