@@ -1,6 +1,7 @@
 # Active PV Battery Charging: journal-based control
 
-Development status, 11 October 2026. No production Pi, database or token was accessed.
+Development status, 12 October 2026. Development uses user-provided hardware logs;
+no production Pi, database or token was accessed from the development machine.
 This build can issue real sonnen charging commands. It is no longer observation-only.
 The hardware lease design remains available for other adapters, but sonnen now uses
 an action journal under the explicit assumption that evcc is the intended sole controller.
@@ -58,6 +59,31 @@ Every command follows this order:
    readback when supported. Old automatic mode or a previous setpoint is initially
    pending, not evidence of foreign control. Do not resend charge while pending.
 4. Append and sync confirmation. An unchanged command is not rewritten each cycle.
+
+For devices without a charge-setpoint readback, confirmation additionally requires
+measured charging above the 5 W idle tolerance. A manual mode response alone is
+insufficient. This proves charging activity, not exact acceptance of the requested
+watts. A pending command without charging times out after 90 seconds and returns
+control. If charging disappears during an active session without readback, a
+separate 90-second timer prevents subsequent requests or the grid deadband from
+masking that loss indefinitely. Grid import still starts release immediately in
+the next control cycle, without waiting for either timeout.
+
+The optional `BatteryChargePowerUpdater` on a charge controller changes a setpoint
+only after the journal has established and freshly observed its own manual control.
+The sonnen `chargepowerupdate` plugin sends only `POST /api/v2/setpoint/charge/{watt}`.
+Acquisition retains the existing mode/discharge-zero/charge sequence. Devices
+without this optional update path retain their existing setter. Restart recovery,
+unknown manual control and failed update writes retain the journal's restore rules.
+
+On 12 October, the supplied hardware logs showed 410 W requested and 409-414 W
+charging, followed by 432/400 W requests with only 2-3 W actual charging. A later
+482 W request produced 481 W actual charging. The previous adapter repeated the
+manual-mode command and a discharge-zero command on every update. Removing those
+intermediate writes eliminates an avoidable interruption opportunity; their role
+in the observed hardware gap is not yet proven. The same logs confirmed release
+after 10 W grid import and automatic mode 2 in the next cycle. The revised update
+path still requires a controlled hardware test.
 
 Release and user decisions are persisted the same way. A torn final record,
 unreadable file blocks automatic control. A write failure blocks new charging,

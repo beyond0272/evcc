@@ -96,6 +96,117 @@ func journalFixture() (*JournalSession, *journalDevice, *memoryJournal) {
 	j := NewJournalSession(&Session{now: func() time.Time { return d.now }}, m, d, d, d)
 	return j, d, m
 }
+
+type updatingJournalDevice struct{ *journalDevice }
+
+func (d updatingJournalDevice) UpdateBatteryChargePower(p float64) error {
+	if d.store.record.Stage != "intent" {
+		panic("update before durable intent")
+	}
+	d.commands = append(d.commands, "update")
+	d.manual(p)
+	if d.failWrite {
+		return errors.New("update acknowledgement lost")
+	}
+	return nil
+}
+
+func TestJournalOwnedPowerUpdateDoesNotReenterManualMode(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		j, d, _ := journalFixture()
+		j.setter = updatingJournalDevice{d}
+		startJournal(t, j, d)
+		d.state.Power = -410
+		d.failWrite = fail
+		in := inputs()
+		in.Grid = -118
+		err := tick(j, d, in)
+		if fail {
+			require.Error(t, err)
+			require.Equal(t, []string{"charge", "update", "restore:10"}, d.commands)
+			require.Equal(t, Recovering, j.Phase)
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, []string{"charge", "update"}, d.commands)
+			require.Equal(t, 428.0, j.Record.Power)
+			require.Equal(t, Confirming, j.Phase)
+			require.NoError(t, tick(j, d, in))
+			require.Equal(t, Active, j.Phase)
+		}
+	}
+}
+
+func TestJournalManualModeAloneDoesNotConfirmCharging(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		j, d, _ := journalFixture()
+		require.NoError(t, j.Step(inputs()))
+		d.state.ChargeSetpoint = nil
+		d.state.Power = -3
+		require.NoError(t, tick(j, d, inputs()))
+		require.Equal(t, Confirming, j.Phase)
+		require.Equal(t, []string{"charge"}, d.commands)
+		if resume {
+			d.state.Power = -399
+			require.NoError(t, tick(j, d, inputs()))
+			require.Equal(t, Active, j.Phase)
+		} else {
+			require.NoError(t, tick(j, d, inputs()))
+			require.Equal(t, Confirming, j.Phase)
+			require.NoError(t, tick(j, d, inputs()))
+			require.Equal(t, Recovering, j.Phase)
+			require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+		}
+	}
+}
+
+func TestJournalSetpointUpdaterRequiresOwnedControl(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		j, d, m := journalFixture()
+		if restart {
+			startJournal(t, j, d)
+			j = restartedJournal(j, d, m)
+			d.commands = nil
+		} else {
+			d.manual(400)
+		}
+		j.setter = updatingJournalDevice{d}
+		require.NoError(t, tick(j, d, inputs()))
+		if restart {
+			require.Equal(t, []string{"restore:10"}, d.commands)
+		} else {
+			require.Empty(t, d.commands)
+			require.Equal(t, Conflict, j.Phase)
+		}
+	}
+}
+
+func TestJournalMissingChargeDoesNotDelayGridImportRecovery(t *testing.T) {
+	j, d, _ := journalFixture()
+	require.NoError(t, j.Step(inputs()))
+	d.state.ChargeSetpoint = nil
+	d.state.Power = -3
+	in := inputs()
+	in.Grid = 10
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Recovering, j.Phase)
+	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+}
+
+func TestJournalMissingChargingDuringActiveControlRestores(t *testing.T) {
+	j, d, _ := journalFixture()
+	startJournal(t, j, d)
+	d.state.ChargeSetpoint = nil
+	d.state.Power = -3
+	in := inputs()
+	in.Grid = -50 // deadband holds the previous request, but must not mask missing charge
+	for range 3 {
+		require.NoError(t, tick(j, d, in))
+		require.Equal(t, Active, j.Phase)
+	}
+	require.NoError(t, tick(j, d, in))
+	require.Equal(t, Recovering, j.Phase)
+	require.Equal(t, []string{"charge", "restore:10"}, d.commands)
+}
 func tick(j *JournalSession, d *journalDevice, in Input) error {
 	d.now = d.now.Add(30 * time.Second)
 	return j.Step(in)

@@ -12,6 +12,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSonnenChargePowerUpdateOnlyWritesSetpoint(t *testing.T) {
+	var requests []string
+	fail := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "test-only", r.Header.Get("Auth-Token"))
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if fail {
+			http.Error(w, "rejected", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}))
+	defer server.Close()
+	m, err := NewFromConfig(t.Context(), "template", map[string]any{
+		"template": "sonnenbatterie", "usage": "battery", "host": strings.TrimPrefix(server.URL, "http://"), "token": "test-only",
+	})
+	require.NoError(t, err)
+	setter, ok := api.Cap[api.BatteryChargePowerController](m)
+	require.True(t, ok)
+	require.NoError(t, setter.SetBatteryChargePower(410))
+	require.Equal(t, []string{
+		"PUT /api/v2/configurations",
+		"POST /api/v2/setpoint/discharge/0",
+		"POST /api/v2/setpoint/charge/410",
+	}, requests)
+	requests = nil
+	update, ok := setter.(api.BatteryChargePowerUpdater)
+	require.True(t, ok)
+	require.NoError(t, update.UpdateBatteryChargePower(432))
+	require.NoError(t, update.UpdateBatteryChargePower(400))
+	require.Equal(t, []string{
+		"POST /api/v2/setpoint/charge/432",
+		"POST /api/v2/setpoint/charge/400",
+	}, requests)
+	requests = nil
+	fail = true
+	require.Error(t, update.UpdateBatteryChargePower(450))
+	require.Equal(t, []string{"POST /api/v2/setpoint/charge/450"}, requests)
+}
+
 func TestSonnenActualControlState(t *testing.T) {
 	for _, tc := range []struct {
 		mode, system string

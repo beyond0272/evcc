@@ -49,6 +49,7 @@ type JournalSession struct {
 	restart          bool
 	storeErr         error
 	recoveryOnly     bool
+	noChargeSince    time.Time
 	ObservationAt    time.Time
 	ObservationValid bool
 }
@@ -128,6 +129,7 @@ func (j *JournalSession) finish(reason string) error {
 		return err
 	}
 	j.power = 0
+	j.noChargeSince = time.Time{}
 	j.transition(Observing, reason)
 	return nil
 }
@@ -199,6 +201,10 @@ func (j *JournalSession) confirm(state api.BatteryControlState) error {
 	if state.Mode != api.BatteryOperatingManual || !state.ObservedAt.After(j.Record.PendingSince) ||
 		(state.ChargeSetpoint != nil && *state.ChargeSetpoint != j.Record.Power) {
 		j.transition(Confirming, "waiting for manual mode confirmation")
+		return nil
+	}
+	if state.ChargeSetpoint == nil && state.Power >= -NativeChargeIdleTolerance {
+		j.transition(Confirming, "manual mode observed; waiting for actual charging")
 		return nil
 	}
 	r := j.Record
@@ -299,6 +305,17 @@ func (j *JournalSession) Step(in Input) error {
 	if j.Record.Identity == "" {
 		j.Record.Identity = s.Identity
 	}
+	// Without setpoint readback, repeated writes must not hide a battery that stopped charging.
+	if j.outstanding() && s.Mode == api.BatteryOperatingManual && s.ChargeSetpoint == nil && s.Power >= -NativeChargeIdleTolerance {
+		if j.noChargeSince.IsZero() {
+			j.noChargeSince = j.clock()
+		}
+		if j.clock().Sub(j.noChargeSince) >= ConfirmationWindow {
+			return j.Release("actual charging absent; restore previous mode")
+		}
+	} else {
+		j.noChargeSince = time.Time{}
+	}
 	if j.Record.Stage == "intent" {
 		if !safePVInput(in, s) || j.Record.Power > in.MaxPower || j.Record.Power > in.PV {
 			return j.Release("unsafe budget while command confirmation pending")
@@ -369,7 +386,11 @@ func (j *JournalSession) Step(in Input) error {
 		return err
 	}
 	j.transition(Confirming, "waiting for manual mode confirmation")
-	if err := j.setter.SetBatteryChargePower(target); err != nil {
+	setPower := j.setter.SetBatteryChargePower
+	if update, ok := j.setter.(api.BatteryChargePowerUpdater); owned && ok {
+		setPower = update.UpdateBatteryChargePower
+	}
+	if err := setPower(target); err != nil {
 		return errors.Join(err, j.Release("charge command failed; restore previous mode"))
 	}
 	// The status endpoint may lag behind a successful command. Observe next cycle.

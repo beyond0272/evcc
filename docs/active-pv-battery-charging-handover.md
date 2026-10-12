@@ -1,3 +1,24 @@
+# Setpoint updates and charging activity: 12 October 2026
+
+User-supplied logs confirm acquisition at 510 W export, 410 W requested and
+409 W measured charging. Updates to 432/400 W were followed by idle power, while
+a later 482 W request produced 481 W charging. The old template repeated manual
+mode and discharge-zero writes for every adjustment. The optional updater now
+sends only the charge setpoint during verified own control. This removes those
+intermediate writes; a hardware test is still needed to establish whether they
+caused the gaps.
+
+Without setpoint readback, manual mode alone no longer confirms a request:
+measured charging above 5 W is required within the existing 90-second window.
+Loss of charging during an active session also triggers restoration after 90
+seconds, including when the grid deadband holds the previous request. Any grid
+import still bypasses the wait. Activity does not prove exact setpoint acceptance.
+
+The live logs also confirmed the existing restoration path at 08:37:14 (10 W
+grid import) and 08:37:44 (automatic mode 2, journal idle). Production is still
+running the earlier confirmation build; no deployment was performed during this
+development step. Keep the copied database and journal for the next controlled test.
+
 # Delayed confirmation and rollback: 11 October 2026
 
 The live test exposed a critical failure: at 09:44:11 CEST an own 418 W command

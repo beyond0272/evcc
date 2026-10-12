@@ -2,6 +2,12 @@ package api
 
 import "time"
 
+// BatteryChargePowerUpdater changes power without re-entering manual mode.
+// Callers must first establish and verify their own manual control.
+type BatteryChargePowerUpdater interface {
+	UpdateBatteryChargePower(power float64) error
+}
+
 // BatteryOperatingMode describes the actual device mode, not evcc's requested mode.
 type BatteryOperatingMode string
 

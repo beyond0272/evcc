@@ -19,6 +19,15 @@ func (f batteryChargePowerSetter) SetBatteryChargePower(power float64) error {
 	return f(power)
 }
 
+type batteryChargePowerControl struct {
+	batteryChargePowerSetter
+	update func(float64) error
+}
+
+func (c batteryChargePowerControl) UpdateBatteryChargePower(power float64) error {
+	return c.update(power)
+}
+
 func init() {
 	registry.AddCtx(api.Custom, NewConfigurableFromConfig)
 }
@@ -42,6 +51,7 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 		LimitSoc              *plugin.Config // optional
 		BatteryMode           *plugin.Config // optional
 		ChargePower           *plugin.Config // optional dynamic charge power setter
+		ChargePowerUpdate     *plugin.Config // optional setpoint-only update for owned manual control
 		BatteryRestoreMode    *plugin.Config
 		BatteryRestoreModes   []string
 		BatteryRestoreDefault string
@@ -51,6 +61,9 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 
 	if err := util.DecodeOther(other, &cc); err != nil {
 		return nil, err
+	}
+	if cc.ChargePowerUpdate != nil && cc.ChargePower == nil {
+		return nil, errors.New("battery charge power update requires chargepower")
 	}
 
 	// default soc limits (nil-preset avoids mapstructure coercing plugin config into the default's type)
@@ -125,7 +138,15 @@ func NewConfigurableFromConfig(ctx context.Context, other map[string]any) (api.M
 			if err != nil {
 				return nil, fmt.Errorf("battery charge power: %w", err)
 			}
-			implement.Has(m, api.BatteryChargePowerController(batteryChargePowerSetter(setPower)))
+			var control api.BatteryChargePowerController = batteryChargePowerSetter(setPower)
+			if cc.ChargePowerUpdate != nil {
+				update, err := cc.ChargePowerUpdate.FloatSetter(ctx, "chargePower")
+				if err != nil {
+					return nil, fmt.Errorf("battery charge power update: %w", err)
+				}
+				control = batteryChargePowerControl{batteryChargePowerSetter(setPower), update}
+			}
+			implement.Has(m, control)
 		}
 
 		// limitSoc expresses normal/hold/charge through the reserve soc (hold uses the live soc),
