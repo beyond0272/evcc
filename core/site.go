@@ -1372,8 +1372,17 @@ func (site *Site) updatePower(lp updater, state siteState, totalChargePower floa
 
 		// battery boost deliberately drains the battery, hence battery priority
 		// below prioritySoc does not apply to the boosting loadpoint (#30541)
-		if lp.GetBatteryBoost() != boostDisabled {
-			sitePower += res.priorityAdjustment
+		coordinated := false
+		if real, ok := lp.(*Loadpoint); ok {
+			coordinated = real.coordinatedPV()
+			if coordinated {
+				sitePower += site.pendingVehiclePowerExcept(real) + site.pendingBatteryPower()
+			}
+		}
+		if lp.GetBatteryBoost() != boostDisabled || coordinated {
+			if !coordinated {
+				sitePower += res.priorityAdjustment
+			}
 			// House/auxiliary loads and other EVs must remain in the boost
 			// budget; do not count them as freely reclaimable solar power.
 			sitePower += state.auxPower + flexiblePower

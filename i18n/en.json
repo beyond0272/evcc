@@ -73,6 +73,7 @@
         "never": "only with enough surplus"
       },
       "bufferTitle": "Battery as charging buffer",
+      "bufferCoordinated": "Home battery energy above {soc} may support ongoing vehicle charging. In PV operation, loadpoints with fixed phases start only when available solar surplus covers their minimum charging power. Battery SoC alone does not start charging. Support ends at the SoC limit; charging pauses if solar power alone is insufficient.",
       "discharge": "Prevent home battery discharge in fast mode and during planned charging.",
       "gridDischarge": "Allow home battery to discharge to the grid.",
       "gridDischargeConfirm": {

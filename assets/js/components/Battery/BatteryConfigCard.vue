@@ -38,16 +38,7 @@
 			></shopicon-regular-lightning>
 			<div>
 				<div class="fw-bold mb-1">{{ $t("battery.config.bufferTitle") }}</div>
-				<i18n-t
-					:keypath="
-						selectedBufferSoc < 100
-							? 'battery.config.buffer'
-							: 'battery.config.bufferNone'
-					"
-					tag="p"
-					class="mb-0"
-					scope="global"
-				>
+				<i18n-t :keypath="bufferDescriptionKey" tag="p" class="mb-0" scope="global">
 					<template #soc>
 						<InlineSocSelect
 							id="batteryBuffer"
@@ -195,6 +186,7 @@ export default defineComponent({
 		batteryGridDischarge: Boolean,
 		batteryPvChargingSupported: Boolean,
 		batteryPvControlUnavailable: Boolean,
+		coordinatedPv: Boolean,
 		batteryPvStartPower: { type: Number, default: 500 },
 		battery: { type: Object as PropType<Battery> },
 		experimental: Boolean,
@@ -208,6 +200,12 @@ export default defineComponent({
 		};
 	},
 	computed: {
+		bufferDescriptionKey(): string {
+			if (this.selectedBufferSoc >= 100) return "battery.config.bufferNone";
+			return this.coordinatedPv
+				? "battery.config.bufferCoordinated"
+				: "battery.config.buffer";
+		},
 		siteConfigRoute() {
 			return { path: "/config", query: { site: "" } };
 		},

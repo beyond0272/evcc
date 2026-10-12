@@ -13,8 +13,13 @@ import (
 
 type cloudSite struct {
 	mockSite
-	soc float64
+	soc         float64
+	coordinated bool
+	buffer      float64
 }
+
+func (s *cloudSite) CoordinatedPVBattery() bool { return s.coordinated }
+func (s *cloudSite) GetBufferSoc() float64      { return s.buffer }
 
 func (s *cloudSite) GetBatterySoc() float64 { return s.soc }
 
@@ -43,6 +48,41 @@ func TestCloudBoostWeatherSequence(t *testing.T) {
 			lp.chargePower = tc.want
 		}
 	}
+}
+
+func TestCoordinatedPVUsesBufferWithoutBoost(t *testing.T) {
+	for _, tc := range []struct{ soc, pv, want float64 }{
+		{55, 1500, 4800}, {50, 1500, 0}, {49, 1500, 0}, {50, 4500, 4500},
+	} {
+		lp, s := cloudLoadpoint()
+		s.coordinated, s.buffer, s.soc = true, 50, tc.soc
+		lp.batteryBoost, lp.batteryBoostLimit = boostDisabled, 5
+		lp.Disable.Delay = 3 * time.Minute
+		got := lp.pvMaxCurrent(lp.chargePower-tc.pv, 2700, true, true)
+		require.InDelta(t, tc.want, currentToPower(got, 3), 0.001)
+		require.Equal(t, boostDisabled, lp.GetBatteryBoost())
+	}
+}
+
+func TestCoordinatedPVNeverStartsFromBufferSoc(t *testing.T) {
+	lp, s := cloudLoadpoint()
+	s.coordinated, s.buffer, s.soc = true, 50, 90
+	lp.batteryBoost = boostDisabled
+	lp.enabled, lp.status, lp.chargePower = false, api.StatusB, 0
+	require.Zero(t, lp.pvMaxCurrent(-1500, 0, true, true))
+	require.Zero(t, lp.pvMaxCurrent(-4139, 0, true, true))
+	require.Equal(t, 6.0, lp.pvMaxCurrent(-4140, 0, true, true))
+	// An enabled charger waiting for the car is still a start, not a running session.
+	lp.enabled = true
+	require.Zero(t, lp.pvMaxCurrent(-1500, 0, true, true))
+}
+
+func TestCloudBoostZeroLimitPreservesExplicitBoost(t *testing.T) {
+	lp, s := cloudLoadpoint()
+	lp.batteryBoostLimit = 0
+	require.InDelta(t, 4800.0, currentToPower(lp.pvMaxCurrent(lp.chargePower-1500, 0, false, false), 3), 0.001)
+	s.coordinated, s.buffer = true, 0
+	require.Zero(t, lp.pvMaxCurrent(lp.chargePower-1500, 0, false, false))
 }
 
 func TestCloudBoostStartAndRestartRequirePV(t *testing.T) {

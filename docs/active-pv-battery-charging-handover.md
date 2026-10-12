@@ -1,3 +1,18 @@
+# Vehicle and home-battery allocation: 12 October 2026
+
+The 13:32 hardware logs exposed the same surplus being requested by both the EV
+and home battery before the EV meter reflected its new offer. The screenshot also
+confirmed that the intended 50% setting was the site buffer, not the separate
+boost limit (which remained 5% with boost disabled).
+
+Fixed-phase PV charging on journal-capable sites now uses `bufferSoc` without
+requiring boost. `bufferStartSoc` no longer bypasses the PV-only minimum for these
+loadpoints. Pending EV offers and pending battery requests are reserved; own
+manual battery charging is handed back before a waiting EV can claim its power.
+The GUI explains this policy instead of offering a conflicting SoC-start selector.
+See [PV cloud support](pv-cloud-boost.md) for scope, tests and timing limitations.
+The production Pi remains on the earlier setpoint build until a controlled update.
+
 # Setpoint updates and charging activity: 12 October 2026
 
 User-supplied logs confirm acquisition at 510 W export, 410 W requested and

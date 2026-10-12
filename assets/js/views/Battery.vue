@@ -29,6 +29,7 @@
 						:battery-pv-start-power="state.batteryPVStartPower ?? 500"
 						:battery-pv-charging-supported="state.batteryPVChargingSupported"
 						:battery-pv-control-unavailable="state.batteryPVControlUnavailable"
+						:coordinated-pv="coordinatedPv"
 						:battery-grid-discharge="state.batteryGridDischarge"
 						:battery="state.battery"
 						:experimental="state.experimental"
@@ -108,6 +109,11 @@ export default defineComponent({
 		};
 	},
 	computed: {
+		coordinatedPv(): boolean {
+			return Object.values(this.state.batteryPVControl ?? {}).some(
+				(c) => c.journalStage !== undefined
+			);
+		},
 		state() {
 			return store.state;
 		},

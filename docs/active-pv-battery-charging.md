@@ -167,8 +167,12 @@ A read/write race against another controller is not fenced by the local journal.
 ## EV coordination and existing mode features
 
 Manual or unobserved batteries contribute no EV discharge capacity. Their existing
-charging demand is not advertised as reclaimable PV. Active EV battery boost
-revokes PV battery charging permission so automatic battery operation can resume.
+charging demand is not advertised as reclaimable PV. For journal-capable batteries,
+owned charging is released when a waiting fixed-phase EV has enough PV to start
+or a charging EV can use more PV. Pending vehicle and battery requests reserve
+their unmeasured demand so both controllers cannot spend the same export.
+The existing site buffer SoC governs support for a running EV; SoC alone cannot
+start it. Explicit EV boost on other sites retains its existing permission guard.
 The cloud-boost controller itself sends no manual discharge commands; see
 [pv-cloud-boost.md](pv-cloud-boost.md).
 

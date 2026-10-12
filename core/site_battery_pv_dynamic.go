@@ -30,6 +30,10 @@ func (site *Site) updatePVBatteryControl(state siteState, valid, allowed bool) {
 	if dimmed := hems.Dimmed(site.hems); dimmed != nil && *dimmed {
 		allowed = false
 	}
+	if site.pvVehiclePriority(state) {
+		allowed = false
+		site.log.DEBUG.Println("PV allocation: returning own battery control for vehicle PV budget")
+	}
 	valid = valid && site.gridMeter != nil && len(site.pvMeters) > 0 && finiteBatteryPVValue(state.gridPower) && finiteBatteryPVValue(state.pvPower)
 	grid, pv := state.gridPower, state.pvPower
 	if valid {
@@ -54,7 +58,10 @@ func (site *Site) updatePVBatteryControl(state siteState, valid, allowed bool) {
 		charges[dev.Config().Name] = max(0, -power)
 		totalDischarge += max(0, power)
 	}
-	var allocated float64
+	allocated := site.pendingVehiclePower()
+	if allocated > 0 {
+		site.log.DEBUG.Printf("PV allocation: reserving %.0fW of unmeasured vehicle demand", allocated)
+	}
 	for _, dev := range site.batteryMeters {
 		meter, name := dev.Instance(), dev.Config().Name
 		reader, hasReader := api.Cap[api.BatteryControlStateReader](meter)

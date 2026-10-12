@@ -73,6 +73,7 @@
         "never": "nur mit genug Überschuss"
       },
       "bufferTitle": "Batterie als Ladepuffer",
+      "bufferCoordinated": "Energie der Hausbatterie oberhalb von {soc} darf laufende Fahrzeugladungen unterstützen. Ladepunkte mit fester Phasenzahl starten im PV-Betrieb erst, wenn der freigebbare Sonnenüberschuss für ihre Mindestladeleistung reicht. Der Speicherstand allein löst keinen Start aus. An der SoC-Grenze endet die Unterstützung; reicht Sonne allein nicht mehr, pausiert die Ladung.",
       "discharge": "Entladung der Hausbatterie im Schnell-Modus und bei geplantem Laden verhindern.",
       "gridDischarge": "Die Entladung der Hausbatterie ins Stromnetz zulassen.",
       "gridDischargeConfirm": {

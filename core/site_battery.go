@@ -340,7 +340,7 @@ func batteryAutomaticOperation(meter api.Meter) bool {
 
 func (site *Site) evBatteryBoostActive() bool {
 	for _, lp := range site.loadpoints {
-		if lp.charging() && lp.GetBatteryBoost() != boostDisabled {
+		if lp.charging() && lp.GetBatteryBoost() != boostDisabled && !lp.coordinatedPV() {
 			return true
 		}
 	}

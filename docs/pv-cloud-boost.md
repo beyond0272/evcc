@@ -1,11 +1,15 @@
 # PV cloud support for fixed-phase vehicle charging
 
-Development update, 10 October 2026. No production deployment.
+Development update, 12 October 2026. This coordination change is not deployed.
 
 ## Policy
 
-This path applies when battery boost is enabled and the loadpoint uses fixed
-phases (Bluey: three). Automatic phase-switching boost retains its existing
+With a journal-capable PV battery, this path applies to fixed-phase loadpoints
+(Bluey: three) even when the separate battery boost switch is off. It uses the
+existing site `bufferSoc` setting (50% in this installation), not the separate
+loadpoint `batteryBoostLimit`. The site `bufferStartSoc` cannot authorize a start
+on this path. Without a journal-capable battery, explicit boost retains its
+existing activation and SoC-limit settings. Automatic phase-switching retains its existing
 implementation. The EV minimum is derived from effective minimum current and
 active phases, not hard-coded to 4200 W. At 6 A, 230 V and three phases it is
 4140 W. The user explicitly selected the calculated minimum.
@@ -18,9 +22,10 @@ active phases, not hard-coded to 4200 W. At 6 A, 230 V and three phases it is
 - Pause in the current control cycle when the combined budget is below the EV
   minimum. The normal disable delay, buffer-start setting and minimum-current
   overrides must not keep charging from a planned grid contribution.
-- At or below the configured battery-boost SoC limit (currently 50%), hold boost.
-  Continue on PV alone if sufficient; otherwise pause. Existing hold semantics
-  prevent oscillation until disconnect or an explicitly relaxed SoC limit.
+- At or below `bufferSoc`, no battery support is budgeted. Continue on PV alone
+  if sufficient; otherwise pause. A paused vehicle must pass the PV-only start
+  gate again even if the battery recharges above the buffer. A value of zero or
+  100 disables automatic buffer support. Legacy explicit boost retains its hold semantics.
 - Respect known discharge limits, maximum EV current and downstream circuit
   limits. Missing/non-finite discharge limits mean no planned battery support.
 - An unavailable current SoC reading contributes no discharge budget, even when
@@ -74,5 +79,32 @@ accurate allowed discharge limit. Simulated tests do not verify the physical
 battery response. The action journal and GUI confirmation are implemented separately; see
 [PV battery control](active-pv-battery-charging.md). Manual or unobserved batteries
 contribute no discharge capacity and their charging demand is not reclaimable PV.
-Active EV boost returns owned PV charging to automatic mode. No token or production
-database was accessed.
+The coordinated path uses the allocation and handoff rules below. Legacy explicit
+boost still returns owned PV charging to automatic mode. No token or production
+database was accessed during development.
+
+## Shared allocation and handoff
+
+The 12 October logs showed a repeated allocation error: at 13:32:32 the vehicle
+offer increased from 6 to 8.11 A (about 1456 W), while the same measured export
+caused a 1451 W home-battery charge command. The new accounting reserves positive
+offer-minus-measurement differences across connected, enabled vehicles before
+allocating battery charging. A reduction creates no free budget until measured.
+Other vehicle offers and unmeasured journal commands are likewise reserved when
+computing a vehicle's budget. Outstanding release commands remain reserved until
+their restoration is confirmed. This is conservative: a vehicle that draws less
+than its offer can leave some export unallocated. No timeout guesses that an
+accepted offer has ceased to be actionable.
+
+Manual charging is never counted as immediately reclaimable PV. When export plus
+charging owned by our journal would cover a waiting vehicle's minimum (after the
+reserve and respecting battery priority), the battery returns to automatic mode
+first. Allocation then waits for measurements and journal confirmation. Foreign
+manual charging is not released. A running vehicle with current headroom gets
+priority over new battery charge requests; at the EV current cap, remaining
+export may charge the battery above its configured 500 W default start value.
+
+Tests reproduce the 1551 W export / 8.11 A offer case, delayed meter response in
+both directions, multiple EV reservations, the journal handoff, no acquisition
+of foreign control, priority SoC, current caps, 50% boundary with boost disabled,
+and high-SoC PV-only start/restart. These tests cannot establish hardware timing.
